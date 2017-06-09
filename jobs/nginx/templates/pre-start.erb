@@ -1,0 +1,43 @@
+#!/bin/bash
+
+set -e # exit immediately if a simple command exits with a non-zero status
+set -u # report the usage of uninitialized variables
+
+export SSL_CERT_LOCATION=<%= p('ssl.cert_folder') %>
+export NGINX_CONFIG_LOCATION=<%= p('ssl.nginx_conf_folder') %>
+
+if [ ! -d $SSL_CERT_LOCATION ]; then
+  mkdir -p $SSL_CERT_LOCATION
+fi
+
+if [ ! -d $NGINX_CONFIG_LOCATION ]; then
+  mkdir -p $NGINX_CONFIG_LOCATION
+fi
+
+
+echo "deleting old keys"
+#rm $SSL_CERT_LOCATION/*.key $SSL_CERT_LOCATION/*.cert;
+
+<%
+p('ssl.certs').each do |cert|
+%>
+
+## Using EOF multi line instead of "echo -n" to avoid problems with quotes
+
+cat <<- "_EOF_<%= cert["name"] %>.chained.crt.key_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.chained.crt
+<%= cert["fullchain"] %>
+_EOF_<%= cert["name"] %>.chained.crt.key_
+
+cat <<- "_EOF_<%= cert["name"] %>.key_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.key
+<%= cert["private_key"] %>
+_EOF_<%= cert["name"] %>.key_
+
+cat <<- "_EOF_<%= cert["name"] %>.crt_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.crt
+<%= cert["certificate"] %>
+_EOF_<%= cert["name"] %>.crt_
+
+cat <<- "_EOF_<%= cert["name"] %>.conf_" > /${NGINX_CONFIG_LOCATION}/<%= cert["name"] %>.conf
+<%= cert["conf"] %>
+_EOF_<%= cert["name"] %>.conf_
+
+<% end %>

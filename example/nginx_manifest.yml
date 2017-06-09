@@ -1,0 +1,142 @@
+---
+name: nginx
+
+director_uuid: Director-UUID-HERE # FIXME run bosh2 environment (v2) or bosh status (v1) to find this value.
+
+releases:
+- name: nginx
+  version: latest
+- name: nginx-tlsconfig-release
+  version: latest
+
+stemcells:
+- alias: ubuntu
+  os: ubuntu-trusty
+  version: latest
+
+instance_groups:
+- name: nginx-ubuntu
+  instances: 1
+  vm_type: default
+  stemcell: ubuntu
+  azs: [z1]
+  networks:
+  - name: default
+  jobs:
+  - name: tls-config
+    release: nginx-tlsconfig-release
+    properties:
+      ssl:
+        cert_folder: /var/vcap/jobs/tls-config/certs/
+        nginx_conf_folder: /var/vcap/jobs/tls-config/vhosts/
+        certs:
+        - name: example  # FIXME Name this cert block 
+          conf: |  # FIXME add your server name & config for this vhost. The certificate and key filename is in the format : this-certblock-name.crt or this-certblock-name.key
+            server {
+                server_name example_com;
+                ssl_certificate /var/vcap/jobs/tls-config/certs/example.crt;
+                ssl_certificate_key /var/vcap/jobs/tls-config/certs/example.key;
+                # SSL configuration
+                listen *:443 ssl;
+                ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+                ssl_prefer_server_ciphers on;
+                ssl_ciphers "EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH";
+                ssl_ecdh_curve secp384r1;
+                ssl_session_cache shared:SSL:10m;
+                ssl_session_tickets off;
+                ssl_stapling on;
+                ssl_stapling_verify on;
+                # disable HSTS header for now
+                #add_header Strict-Transport-Security "max-age=63072000;
+                access_log /var/vcap/sys/log/nginx/access.log;
+                root /var/vcap/store/nginx;
+                index index.shtml index.html index.htm;
+            }
+            # FIXME: Reference name of variable you use and its object (rootCA, private_key, certificate)  here.
+            # We use rootCA object to store the certificate chain 
+            # Ideally you would use credhubs to store the certificate variables. --var-stores also work though.
+          fullchain: ((example_com.ca))
+          private_key: ((example_com.private_key))
+          certificate: ((example_com.certificate))
+
+  - name: nginx
+    release: nginx
+    properties:
+      # FIXME: This is your overall nginx config. if you fix the location of nginx_conf_folder above, you will need to modify the incude line below.
+      nginx_conf: |
+        # Optimise this depends on the vm-type and how many VCPU available.
+        worker_processes  1;
+        # Location for error log
+        error_log /var/vcap/sys/log/nginx/error.log   info;
+        # How many clients can be served simultaneously ?
+        # Run `ulimit -n` to find out our core's limitation.
+        events {
+          worker_connections  1024;
+        }
+        http {
+          # For more information on tcp_nopush and tcp_nodelay, read here:
+          # https://www.linode.com/docs/web-servers/nginx/configure-nginx-for-optimized-performance
+          tcp_nopush on;
+          tcp_nodelay on;
+          keepalive_timeout 65;
+          keepalive_requests 100000;
+          # prevent clickjacking attacks
+          add_header  X-Frame-Options SAMEORIGIN;
+
+          # disallow circumventing declared MIME types
+          add_header  X-Content-Type-Options nosniff;
+
+          # X-XSS-Protection
+          add_header  X-XSS-Protection '1; mode=block';
+
+          include /var/vcap/packages/nginx/conf/mime.types;
+
+          # Set default type for unspecified mime type
+          default_type  application/octet-stream;
+
+          # We are not serving files stored on Nginx so no need for this feature which helps serving static files.
+          sendfile        off;
+          # Turn off server side include
+          ssi off;
+          server_names_hash_bucket_size 64;
+          # Default HTTP request will redirect to HTTPS
+          server {
+              listen *:80;
+              server_name _;
+              return 301 https://$host$request_uri;
+          }
+          # For better security we may wanna generate dhparam later?
+          # ssl_dhparam /var/vcap/jobs/nginx/conf/dhparam.pem;
+          # Include all vhosts files from our addon release
+          include /var/vcap/jobs/tls-config/vhosts/*.conf;
+        }
+      pre_start: |
+        #!/bin/bash -ex
+        # This prestart script will be executed after
+        # nginx-multiple-ssl-addon prestart scrpt.
+        # This is not needed at the moment beside echo-ing out an index page as an example
+        NGINX_DIR=/var/vcap/store/nginx
+        if [ ! -d $NGINX_DIR ]; then
+          mkdir -p $NGINX_DIR
+          cd $NGINX_DIR
+          echo  '<html><title>hello</title><body><h1>Hello there</h1></body></html>' > index.shtml
+        fi
+
+variables:
+- name: default-ca
+  type: certificate
+  options:
+    is_ca: true
+    common_name: default.ca
+- name: example_com
+  type: certificate
+  options:
+    ca: default-ca
+    common_name: example.com
+
+update:
+  canaries: 1
+  max_in_flight: 1
+  serial: false
+  canary_watch_time: 1000-60000
+  update_watch_time: 1000-60000
