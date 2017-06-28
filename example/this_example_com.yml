@@ -45,7 +45,7 @@
 
 ### LETSENCRYPT configuration
 - type: replace
-  path: /instance_groups/name=letsencrypt-ubuntu/jobs/name=letsencrypt_to_credhub/properties/certs/-
+  path: /instance_groups/name=letsencrypt-errand/jobs/name=letsencrypt_to_credhub/properties/certs/-
   value:
     # FIXME: The name of this item should be the same as the name of the variable we are changing in credhub
     name: this_example_com

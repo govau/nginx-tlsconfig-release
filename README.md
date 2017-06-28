@@ -12,7 +12,7 @@ This BOSH release is built to be used together with the community [nginx-release
 1. Upload the release to BOSH director
 
 ```
-bosh upload-release https://github.com/govau/nginx-tlsconfig-release/releases/download/1.0/nginx-tlsconfig-release-v2.0.tgz
+bosh upload-release https://github.com/govau/nginx-tlsconfig-release/releases/download/1.1/release_v1.1.tgz
 ```
 
 2. Create BOSH manifest to deploy nginx server using both [nginx-release](https://github.com/cloudfoundry-community/nginx-release) and this release.
