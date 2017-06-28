@@ -1,0 +1,79 @@
+#!/bin/bash
+
+set -e # exit immediately if a simple command exits with a non-zero status
+set -u # report the usage of uninitialized variables
+
+echo "Starting letsencrypt errand script"
+
+<%= p('run_head') %>
+
+## SET alias to make executing acme script easy
+ACME="python /var/vcap/packages/letsencrypt/bin/acme_tiny.py"
+
+export LENC_CERT_LOCATION=<%= p('cert_folder') %>
+export WEBROOT=<%= p('webroot') %>
+
+if [ ! -d $LENC_CERT_LOCATION ]; then
+  mkdir -p $LENC_CERT_LOCATION
+fi
+
+echo "Going through all the certs array and populate signed certificate"
+<%
+p('certs').each do |cert|
+%>
+
+export CURRENTTIME=$(date +"%Y%m%d-%H%M")
+export CERTNAME="<%= cert["name"] %>"
+export CERTFOLDER="$LENC_CERT_LOCATION/$CERTNAME"
+
+# Create a unique folder for each item and back up old ones. (could be useful feature when working with Shared volumes (eg AWS-EFS))
+
+if [ ! -d $CERTFOLDER ]; then
+  # Create new cert folder
+  mkdir -p $CERTFOLDER
+else
+  # Backup previous cert
+  mv $CERTFOLDER $CERTFOLDER.$CURRENTTIME
+  # Create new cert folder
+  mkdir -p $CERTFOLDER
+fi
+
+## Using EOF multi line instead of "echo -n" to avoid problems with quotes
+
+cat <<- "_EOF_<%= cert["name"] %>.cnf_" > "/${CERTFOLDER}/cert.cnf"
+<%= cert["cnf"] %>
+_EOF_<%= cert["name"] %>.cnf_
+
+cat <<- "_EOF_<%= cert["name"] %>.domain.key_" > "/${CERTFOLDER}/domain.key"
+<%= cert["domain_key"] %>
+_EOF_<%= cert["name"] %>.domain.key_
+
+cat <<- "_EOF_<%= cert["name"] %>.account.key_" > "/${CERTFOLDER}/account.key"
+<%= cert["account_key"] %>
+_EOF_<%= cert["name"] %>.account.key_
+
+# Create openssl CNF config file
+
+# Signing the CNF with domain private key and create a CSR (Certificate Signing Request)
+openssl req -new -key "$CERTFOLDER/domain.key" -config "$CERTFOLDER/cert.cnf" -out "$CERTFOLDER/cert.csr"
+
+# Get intermediate cert
+
+wget -O - https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem > "$CERTFOLDER/intermediate.pem"
+
+# LetsEncrypt will now do validation and optain new cert.
+# Account key is used for validation. This key can be used to revoke certs using certbot client.
+# A signed cert will be created under "$CERTFOLDER".
+
+echo "Running acme-tiny script to get signed cert from Letsencrypt"
+$ACME --account-key "$CERTFOLDER/account.key" \
+  --csr "$CERTFOLDER/cert.csr" \
+  --acme-dir "$WEBROOT" > "$CERTFOLDER/signed.crt"
+
+echo "Generating final cert"
+
+cat "$CERTFOLDER/signed.crt" "$CERTFOLDER/intermediate.pem" > "$CERTFOLDER/chained.pem"
+
+<% end %>
+
+<%= p('run_tail') %>

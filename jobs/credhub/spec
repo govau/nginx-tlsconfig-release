@@ -1,0 +1,43 @@
+---
+name: credhub
+packages:
+- credhub
+templates:
+  pre-start.erb: bin/pre-start
+  run.erb: bin/run
+properties:
+  pre_start:
+    default: "#Empty prestart script"
+    description: Prestart script can be entered here.
+  wait_for:
+    default: "NONE"
+    description: Define a job that we will wait for before executing this script. Set to NONE if we want the script to execute immediately
+  cert_folder:
+    default: /var/vcap/store/certs/
+    description: Location of certs folder.
+  run_head:
+    default: "# empty pre_start_head"
+    description: Custom script runs before credhub pre-start do its things
+  run_tail:
+    default: "# empty pre_start_tail"
+    description: Custom script runs after credhub pre-start do its things
+  credhub_username:
+    default: "admin"
+    description: Username for credhub
+  credhub_prefix_name:
+    default: "/Bosh Lite Director/nginx/"
+    description: In credhub, the variable name is prefix with the BOSH director name and project name. (eg:/Bosh Lite Director/nginx/)
+  credhub_password:
+    default: "NOTUSED"
+    description: Username for credhub
+  credhub_host:
+    default: "https://192.168.50.6:8844"
+    description: Credhub address. For vbox environment it is https://192.168.50.6:8844
+  certs:
+    default:
+      - name: "example_cloud_gov_au"
+        cert_folder: "NONE"
+        credhub_prefix_name: "NONE"
+        private_key_file: "/PATH/TO/domain.key"
+        private_cert_file: "/ACTUAL_PATH/TO/chained.pem"
+    description: An array of configurations for all the certs we are importing into credhub.

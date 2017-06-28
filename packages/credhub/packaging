@@ -1,0 +1,14 @@
+set -e
+set -u
+
+# Available variables
+# $BOSH_COMPILE_TARGET - where this package & spec'd source files are available
+# $BOSH_INSTALL_TARGET - where you copy/install files to be included in package
+
+# un-tar credhub file into credhub folder because the executable has the same
+# name as the script that runs to unpack this which is stored in the same folder.
+tar xzvf credhub/credhub-linux-1.0.0.tgz -C credhub/
+
+mkdir -p $BOSH_INSTALL_TARGET/bin
+cp credhub/credhub $BOSH_INSTALL_TARGET/bin/credhub
+chmod +x $BOSH_INSTALL_TARGET/bin/credhub

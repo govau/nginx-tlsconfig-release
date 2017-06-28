@@ -1,0 +1,59 @@
+---
+name: letsencrypt
+packages:
+- letsencrypt
+templates:
+  pre-start.erb: bin/pre-start
+  run.erb: bin/run
+properties:
+  pre_start:
+    default: "#Empty prestart script"
+    description: Prestart script can be entered here.
+  webroot:
+    default: /var/vcap/store/nginx/www
+  cert_folder:
+    default: /var/vcap/jobs/store/certs/
+    description: Location of certs folder.
+  run_head:
+    default: "# empty pre_start_head"
+    description: Custom script runs before letsencrypt do its things
+  run_tail:
+    default: "# empty pre_start_tail"
+    description: Custom script runs after letsencrypt do its things
+  certs:
+    default:
+    - name: "example.cloud.gov.au"
+      account_key: |
+        -----BEGIN RSA PRIVATE KEY-----
+        Example private key
+        -----END RSA PRIVATE KEY-----
+      domain_key: |
+        -----BEGIN RSA PRIVATE KEY-----
+        Example private key
+        -----END RSA PRIVATE KEY-----
+      cnf: |
+        [req]
+        default_bits            = 2048
+        default_md              = sha256
+        string_mask             = utf8only
+        prompt                  = no
+        utf8                    = yes
+        distinguished_name      = req_distinguished_name
+        req_extensions          = req_v3_extensions
+
+        [req_distinguished_name]
+        C                       = AU
+        ST                      = New South Wales
+        L                       = SYDNEY
+        O                       = Digital Transformation Agency
+        OU                      = cloud.gov.au
+        CN                      = example.cloud.gov.au
+
+        [req_v3_extensions]
+        subjectAltName = @sans
+
+        [sans]
+        DNS.1 = example.cloud.gov.au
+        DNS.2 = test.example.cloud.gov.au
+        DNS.3 = system.example.cloud.gov.au
+    description: An array configurations and the domain signing key (different to the account_key) for all the certs we are creating

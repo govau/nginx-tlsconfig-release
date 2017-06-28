@@ -1,0 +1,12 @@
+---
+name: letsencrypt
+
+dependencies: []
+
+files:
+- acme_tiny.py
+
+# Copied and vetted from https://github.com/diafygi/acme-tiny
+# Reason for using this over other tools: The client is the smallest out of all (200 lines of python code) and works out of the box with no additional dependency.
+# This can be easily reviewed.
+# The official letsencrypt client is 8600 lines with many dependencies.
