@@ -3,6 +3,8 @@
 set -e # exit immediately if a simple command exits with a non-zero status
 set -u # report the usage of uninitialized variables
 
+<%= p('pre_start_head') %>
+
 export SSL_CERT_LOCATION=<%= p('cert_folder') %>
 export NGINX_CONFIG_LOCATION=<%= p('nginx_conf_folder') %>
 
@@ -41,3 +43,4 @@ cat <<- "_EOF_<%= cert["name"] %>.conf_" > /${NGINX_CONFIG_LOCATION}/<%= cert["n
 _EOF_<%= cert["name"] %>.conf_
 
 <% end %>
+<%= p('pre_start_tail') %>

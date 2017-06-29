@@ -9,8 +9,6 @@ releases:
 - name: nginx-tlsconfig-release
   version: latest
 
-# TODO: Create letsencrypt job in tlsconfig release release
-
 stemcells:
 - alias: ubuntu
   os: ubuntu-trusty

@@ -16,11 +16,11 @@ properties:
     default: /var/vcap/store/certs/
     description: Location of certs folder.
   run_head:
-    default: "# empty pre_start_head"
-    description: Custom script runs before credhub pre-start do its things
+    default: "# empty run_head"
+    description: Custom script runs before credhub do its things
   run_tail:
-    default: "# empty pre_start_tail"
-    description: Custom script runs after credhub pre-start do its things
+    default: "# empty run_tail"
+    description: Custom script runs after credhub do its things
   credhub_username:
     default: "admin"
     description: Username for credhub

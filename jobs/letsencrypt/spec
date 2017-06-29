@@ -15,10 +15,10 @@ properties:
     default: /var/vcap/jobs/store/certs/
     description: Location of certs folder.
   run_head:
-    default: "# empty pre_start_head"
+    default: "# empty run_head"
     description: Custom script runs before letsencrypt do its things
   run_tail:
-    default: "# empty pre_start_tail"
+    default: "# empty run_tail"
     description: Custom script runs after letsencrypt do its things
   certs:
     default:
