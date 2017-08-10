@@ -32,6 +32,13 @@ if [ ! -d $LENC_CERT_LOCATION ]; then
   mkdir -p $LENC_CERT_LOCATION
 fi
 
+<% if p("override-domain-host-to-localhost"] %>
+# In Vault systems, internal hosts are unable to connect to the the public ip for some reason.
+# As a workaround, add domain-host to the hosts file so when acme_tiny.py verifies it can connect
+# to the domain-host it will use 127.0.0.1
+echo "127.0.0.1 <%= p('domain-host')%>" >> /etc/hosts
+<% end %>
+
 echo "Going through all the certs array and populate signed certificate"
 <%
 p('certs').each do |cert|
