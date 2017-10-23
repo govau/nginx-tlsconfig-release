@@ -1,0 +1,132 @@
+
+- type: replace
+  path: /releases/-
+  value:
+    name: nginx
+    url: https://github.com/cloudfoundry-community/nginx-release/releases/download/v1.12.2/nginx-1.12.2.tgz
+    version: 1.12.2
+    sha1: e5e5f54d46e2a70fac85ba16e96ccb7e4148bdfa
+
+- type: replace
+  path: /releases/-
+  value:
+    name: nginx-tlsconfig
+    version: latest
+
+- type: replace
+  path: /instance_groups/name=router/jobs/-
+  value:
+    name: tls-config
+    release: nginx-tlsconfig
+    properties:
+      certs: [] # to be added by other operator files
+
+- type: replace
+  path: /instance_groups/name=router/jobs/-
+  value:
+    name: nginx
+    release: nginx
+    properties:
+      nginx_conf: |
+        # Optimise this depends on the vm-type and how many VCPU available.
+        worker_processes  1;
+        # Location for error log
+        error_log /var/vcap/sys/log/nginx/error.log info;
+        # How many clients can be served simultaneously ?
+        # Run `ulimit -n` to find out our core's limitation.
+        events {
+          worker_connections 1024;
+        }
+        http {
+          # For more information on tcp_nopush and tcp_nodelay, read here:
+          # https://www.linode.com/docs/web-servers/nginx/configure-nginx-for-optimized-performance
+          tcp_nopush on;
+          tcp_nodelay on;
+          keepalive_timeout 65;
+          keepalive_requests 100000;
+          # prevent clickjacking attacks
+          add_header X-Frame-Options SAMEORIGIN;
+          # disallow circumventing declared MIME types
+          add_header X-Content-Type-Options nosniff;
+          # X-XSS-Protection
+          add_header X-XSS-Protection '1; mode=block';
+          include /var/vcap/packages/nginx/conf/mime.types;
+          # Set default type for unspecified mime type
+          default_type  application/octet-stream;
+          # We are not serving files stored on Nginx so no need for this feature which helps serving static files.
+          sendfile off;
+          # Turn off server side include
+          ssi off;
+          server_names_hash_bucket_size 64;
+          # Default HTTP request will redirect to HTTPS
+          server {
+            listen 8342;
+
+            # This is the most important bit for this to work, we will need to forward all acme-challenge requests to our
+            # letsencrypt errand instance.
+            location /.well-known/acme-challenge {
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header Host $http_host;
+              proxy_redirect off;
+
+              # FIXME: Change this to the static ip of the letsencrypt errand machine in production.
+              #proxy_pass http://le-challenge.cld.internal;
+              proxy_pass http://127.0.0.1:80;
+            }
+            # All other URIs should result in a 301 redirect to equivalent HTTPS pages.
+            location / {
+              return 301 https://$host$request_uri;
+            }
+          }
+
+          # TODO: This need to be specified in production and generated outselve.
+          # ssl_dhparam /var/vcap/jobs/nginx/conf/dhparam.pem;
+          # FIXME: Include all vhosts files from our addon release (make sure the folder path matches with what we specified earlier.)
+          include /var/vcap/jobs/tls-config/vhosts/*.conf;
+        }
+
+- type: replace
+  path: /variables/-
+  value:
+    name: nginx-selfsigned-ca
+    type: certificate
+    options:
+      is_ca: true
+      common_name: nginx-selfsigned-ca
+
+
+# Example cert 1
+- type: replace
+  path: /instance_groups/name=router/jobs/name=tls-config/properties/certs?/-
+  value:
+    name: cloud
+    hostnames: [cloud.gov.au, www.cloud.gov.au]
+    certificate: ((cloud-gov-au))
+
+# Placeholder, should be replaced by Let's Encrypt or other real cert
+- type: replace
+  path: /variables/-
+  value:
+    name: cloud-gov-au
+    type: certificate
+    options:
+      ca: nginx-selfsigned-ca
+      common_name: cloud.gov.au
+
+# Example cert 2
+- type: replace
+  path: /instance_groups/name=router/jobs/name=tls-config/properties/certs?/-
+  value:
+    name: dta
+    hostnames: [dta.gov.au, www.dta.gov.au]
+    certificate: ((dta-gov-au))
+
+# Placeholder, should be replaced by Let's Encrypt or other real cert
+- type: replace
+  path: /variables/-
+  value:
+    name: dta-gov-au
+    type: certificate
+    options:
+      ca: nginx-selfsigned-ca
+      common_name: dta.gov.au

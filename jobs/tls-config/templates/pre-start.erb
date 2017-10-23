@@ -25,26 +25,25 @@ p('certs').each do |cert|
 
 ## Using EOF multi line instead of "echo -n" to avoid problems with quotes
 
-cat <<- "_EOF_<%= cert["name"] %>.ca.crt.key_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.chained.crt
+cat <<EOF_WILL_NOT_BE_IN_CERT > ${SSL_CERT_LOCATION}/<%= cert["name"] %>.chained.crt
 <%= cert["certificate"]["ca"] %>
-_EOF_<%= cert["name"] %>.ca.crt.key_
+EOF_WILL_NOT_BE_IN_CERT
 
-cat <<- "_EOF_<%= cert["name"] %>.key_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.key
+cat <<EOF_WILL_NOT_BE_IN_CERT > ${SSL_CERT_LOCATION}/<%= cert["name"] %>.key
 <%= cert["certificate"]["private_key"] %>
-_EOF_<%= cert["name"] %>.key_
+EOF_WILL_NOT_BE_IN_CERT
 
-cat <<- "_EOF_<%= cert["name"] %>.crt_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.crt
+cat <<EOF_WILL_NOT_BE_IN_CERT > ${SSL_CERT_LOCATION}/<%= cert["name"] %>.crt
 <%= cert["certificate"]["certificate"] %>
-_EOF_<%= cert["name"] %>.crt_
+EOF_WILL_NOT_BE_IN_CERT
 
-cat <<- "_EOF_<%= cert["name"] %>.conf_" > /${NGINX_CONFIG_LOCATION}/<%= cert["name"] %>.conf
-
+cat <<EOF_WILL_NOT_BE_IN_CERT > ${NGINX_CONFIG_LOCATION}/<%= cert["name"] %>.conf
 server {
-  listen 8344 tls;
+  listen 8344 ssl;
   server_name <%= cert["hostnames"].join(" ") %>;
 
-  ssl_certificate /${SSL_CERT_LOCATION}/<%= cert["name"] %>.crt;
-  ssl_certificate_key /${SSL_CERT_LOCATION}/<%= cert["name"] %>.key;
+  ssl_certificate ${SSL_CERT_LOCATION}/<%= cert["name"] %>.crt;
+  ssl_certificate_key ${SSL_CERT_LOCATION}/<%= cert["name"] %>.key;
 
   # SSL configuration
   ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
@@ -57,15 +56,14 @@ server {
   ssl_stapling_verify on;
 
   location / {
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header Host \$http_host;
     proxy_redirect off;
 
     proxy_pass http://127.0.0.1:80;
   }
 }
-<%= cert["vhostconf"] %>
-_EOF_<%= cert["name"] %>.conf_
+EOF_WILL_NOT_BE_IN_CERT
 
 <% end %>
 <%= p('pre_start_tail') %>
