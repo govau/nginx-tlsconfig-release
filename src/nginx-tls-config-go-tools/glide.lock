@@ -1,0 +1,29 @@
+hash: f98b526cd0f3c47fae6fa520db6ec387ceec3edab0b67992b7889f496545b191
+updated: 2017-10-30T17:11:48.996331783+11:00
+imports:
+- name: github.com/dgrijalva/jwt-go
+  version: dbeaa9332f19a944acb5736b4456cfcc02140e29
+- name: github.com/gorilla/context
+  version: a8d44e7d8e4d532b6a27a02dd82abb31cc1b01bd
+- name: github.com/gorilla/csrf
+  version: 69581736821c33d85bbf378f42f6ad864dbd85de
+- name: github.com/gorilla/mux
+  version: 24fca303ac6da784b9e8269f724ddeb0b2eea5e7
+- name: github.com/gorilla/securecookie
+  version: 667fe4e3466a040b780561fe9b51a83a3753eefc
+- name: github.com/gorilla/sessions
+  version: ca9ada44574153444b00d3fd9c8559e4cc95f896
+- name: github.com/govau/cf-common
+  version: 117fe74bb828a82439c28e9be6f323a765239252
+  subpackages:
+  - credhub
+  - uaa
+- name: github.com/pkg/errors
+  version: 248dadf4e9068a0b3e79f02ed0a610d935de5302
+- name: golang.org/x/crypto
+  version: 2509b142fb2b797aa7587dad548f113b2c0f20ce
+  subpackages:
+  - acme
+- name: gopkg.in/yaml.v2
+  version: a5b47d31c556af34a302ce5d659e6fea44d90de0
+testImports: []

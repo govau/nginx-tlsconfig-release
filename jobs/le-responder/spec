@@ -1,0 +1,14 @@
+---
+name: le-responder
+
+templates:
+  ctl.erb: bin/ctl
+  config.yml.erb: config/config.yml
+
+packages:
+- nginx-tls-config-go-tools
+
+properties:
+  config:
+    description: Misc config
+    default: {}

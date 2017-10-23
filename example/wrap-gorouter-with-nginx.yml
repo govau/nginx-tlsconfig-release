@@ -1,0 +1,238 @@
+# Pull in the standard community nginx release
+- type: replace
+  path: /releases/-
+  value:
+    name: nginx
+    url: https://github.com/cloudfoundry-community/nginx-release/releases/download/v1.12.2/nginx-1.12.2.tgz
+    version: 1.12.2
+    sha1: e5e5f54d46e2a70fac85ba16e96ccb7e4148bdfa
+
+# Pull in our magic
+- type: replace
+  path: /releases/-
+  value:
+    name: nginx-tlsconfig
+    version: latest
+
+# Pull in latest version of CredHub for our instance
+- type: replace
+  path: /releases/-
+  value:
+    name: credhub
+    url: https://bosh.io/d/github.com/pivotal-cf/credhub-release?v=1.6.1
+    version: 1.6.1
+    sha1: 5b3a4ff2cd51d6167bc53eeb8abd47b292e2186f
+
+# Create MySQL database for CredHub 
+- type: replace
+  path: /instance_groups/name=mysql/jobs/name=mysql/properties/cf_mysql/mysql/seeded_databases/-
+  value:
+    name: tlscredhub
+    username: tlscredhub
+    password: ((tlscredhub_database_password))
+
+- type: replace
+  path: /variables/-
+  value:
+    name: tlscredhub_database_password
+    type: password
+
+# Instantiate CredHub instance
+- type: replace
+  path: /instance_groups/-
+  value:
+    name: tls-credhub
+    instances: 1
+    vm_type: minimal
+    azs: [z1]
+    stemcell: default
+    networks:
+    - name: default
+    jobs:
+    - name: consul_agent
+      release: consul
+      consumes:
+        consul_common: {from: consul_common_link}
+        consul_server: nil
+        consul_client: {from: consul_client_link}
+      properties:
+        consul:
+          agent:
+            services:
+              credhub:
+                name: tls-credhub
+    - name: credhub
+      release: credhub
+      properties:
+        credhub:
+          port: 8844
+          tls: ((tls_credhub_tls_cert))
+          authentication:
+            uaa:
+              url: https://uaa.service.cf.internal:8443
+              verification_key: ((uaa_jwt_signing_key.public_key))
+              ca_certs:
+              - ((uaa_ca.certificate))
+          authorization:
+            acls:
+              enabled: true
+          data_storage:
+            type: mysql
+            username: tlscredhub
+            password: ((tlscredhub_database_password))
+            host: sql-db.service.cf.internal
+            port: 3306
+            database: tlscredhub
+            require_tls: false # cf default MySQL doesn't appear to be configured for TLS
+          encryption:
+            keys: 
+            - provider_name: int
+              encryption_password: ((credhub_encryption_password))
+              active: true
+            providers: 
+            - name: int
+              type: internal
+
+- type: replace
+  path: /variables/-
+  value:
+    name: credhub_encryption_password
+    type: password
+    options:
+      length: 40
+
+- type: replace
+  path: /variables/-
+  value:
+    name: tls_credhub_ca
+    type: certificate
+    options:
+      is_ca: true
+      common_name: tls-credhub-ca.service.cf.internal
+
+- type: replace
+  path: /variables/-
+  value:
+    name: tls_credhub_tls_cert
+    type: certificate
+    options:
+      ca: tls_credhub_ca
+      common_name: tls-credhub.service.cf.internal
+
+# Create UAA client for gen_nginx_config so that it can authenticate to our CredHub
+- type: replace
+  path: /instance_groups/name=uaa/jobs/name=uaa/properties/uaa/clients/gen_nginx_config?
+  value:
+    authorities: credhub.read,credhub.write
+    authorized-grant-types: client_credentials
+    secret: "((gen_nginx_config_client_secret))"
+
+- type: replace
+  path: /variables/-
+  value:
+    name: gen_nginx_config_client_secret
+    type: password
+    options:
+      length: 40
+
+# Create our co-located jobs in the router
+
+# This job generate nginx config from data that is in the CredHub
+# During pre-start it will always create a file or error out.
+# However it will ignore errors related to being unable to communicate with CredHub,
+# and instead generates an empty but valid file (otherwise the rest of the cluster may not start)
+# Since the nginx file won't listen on the ports needed, it should ignored by the ELB in front.
+# Normally if it encounters an error, it simply won't rewrite the conf.
+- type: replace
+  path: /instance_groups/name=router/jobs/-
+  value:
+    name: gen-nginx-config
+    release: nginx-tlsconfig
+    properties:
+      config:
+        nginx_job: nginx
+        refresh:
+          uaa_url: https://uaa.service.cf.internal:8443
+          uaa_ca_certificate: ((uaa_ca.certificate))
+          client_id: gen_nginx_config
+          client_secret: ((gen_nginx_config_client_secret))
+          credhub_url: https://tls-credhub.service.cf.internal:8844
+          credhub_ca_certificate: ((tls_credhub_ca.certificate))
+          period: 60
+        template:
+          global: |
+            # Optimise this depends on the vm-type and how many VCPU available.
+            worker_processes  1;
+            # Location for error log
+            error_log /var/vcap/sys/log/nginx/error.log info;
+          
+          events: |
+            # How many clients can be served simultaneously ?
+            # Run `ulimit -n` to find out our core's limitation.
+            worker_connections 1024;
+
+          http: |
+            # For more information on tcp_nopush and tcp_nodelay, read here:
+            # https://www.linode.com/docs/web-servers/nginx/configure-nginx-for-optimized-performance
+            tcp_nopush on;
+            tcp_nodelay on;
+            keepalive_timeout 65;
+            keepalive_requests 100000;
+            # prevent clickjacking attacks
+            add_header X-Frame-Options SAMEORIGIN;
+            # disallow circumventing declared MIME types
+            add_header X-Content-Type-Options nosniff;
+            # X-XSS-Protection
+            add_header X-XSS-Protection '1; mode=block';
+            include /var/vcap/packages/nginx/conf/mime.types;
+            # Set default type for unspecified mime type
+            default_type  application/octet-stream;
+            # We are not serving files stored on Nginx so no need for this feature which helps serving static files.
+            sendfile off;
+            # Turn off server side include
+            ssi off;
+            server_names_hash_bucket_size 64;
+            # Default HTTP request will redirect to HTTPS
+            server {
+              listen 8342;
+
+              # This is the most important bit for this to work, we will need to forward all acme-challenge requests to our
+              # letsencrypt errand instance.
+              location /.well-known/acme-challenge {
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header Host $http_host;
+                proxy_redirect off;
+
+                # FIXME: Change this to the static ip of the letsencrypt errand machine in production.
+                #proxy_pass http://le-challenge.cld.internal;
+                proxy_pass http://127.0.0.1:80;
+              }
+              # All other URIs should result in a 301 redirect to equivalent HTTPS pages.
+              location / {
+                return 301 https://$host$request_uri;
+              }
+            }
+
+          server: |
+            # server_name, ssl_certificate, ssl_certificate_key add automatically
+            listen 8452 ssl;
+            ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+            ssl_prefer_server_ciphers on;
+            ssl_ciphers "EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH";
+            ssl_ecdh_curve secp384r1;
+            ssl_session_cache shared:SSL:10m;
+            ssl_session_tickets off;
+            #ssl_stapling on;
+            #ssl_stapling_verify on;
+            # disable HSTS header for now
+            #add_header Strict-Transport-Security "max-age=63072000;
+
+# Add a standard nginx, where config is delegated to that produced by the gen-nginx-config job
+- type: replace
+  path: /instance_groups/name=router/jobs/-
+  value:
+    name: nginx
+    release: nginx
+    properties:
+      nginx_conf: |
+        include /var/vcap/jobs/gen-nginx-config/config/nginx.conf;

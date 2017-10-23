@@ -1,7 +1,0 @@
----
-name: credhub
-
-dependencies: []
-
-files:
-  - credhub/credhub-linux-1.0.0.tgz

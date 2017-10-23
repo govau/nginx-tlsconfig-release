@@ -1,0 +1,8 @@
+#!/bin/bash
+
+set -eu
+
+JOB_NAME=gen-nginx-config
+CONF_DIR=/var/vcap/jobs/$JOB_NAME/config
+
+/var/vcap/packages/nginx-tls-config-go-tools/bin/gen-nginx-config -config $CONF_DIR/config.yml

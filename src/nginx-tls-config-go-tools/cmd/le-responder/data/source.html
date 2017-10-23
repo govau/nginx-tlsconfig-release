@@ -1,0 +1,22 @@
+<html>
+    <head>
+        <title>Change source</title>
+    </head>
+    <body>
+        <h3>Change source</h3>
+        <form method="POST" action="/update">
+            <input type="hidden" name="action" value="source" />
+            <input type="hidden" name="host" value="{{ .host }}" />
+            <p>Change source to:</p>
+            <p>
+                <select name="source">
+                    {{ range .sources }}
+                        <option>{{ . }}</option>
+                    {{ end }}
+                </select>
+            </p>
+            <p><input type="submit" value="Submit" /></p>
+            {{ .csrfField }}
+        </form>
+    </body>
+</html>

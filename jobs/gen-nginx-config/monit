@@ -1,0 +1,5 @@
+check process gen-nginx-config
+  with pidfile /var/vcap/sys/run/gen-nginx-config/pid
+  start program "/var/vcap/jobs/gen-nginx-config/bin/ctl start"
+  stop program "/var/vcap/jobs/gen-nginx-config/bin/ctl stop"
+  group vcap

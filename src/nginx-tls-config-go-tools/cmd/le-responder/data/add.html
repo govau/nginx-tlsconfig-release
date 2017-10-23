@@ -1,0 +1,23 @@
+<html>
+    <head>
+        <title>Create new certificate</title>
+    </head>
+    <body>
+        <h3>Create new certificate</h3>
+        <form method="POST" action="/update">
+            <input type="hidden" name="action" value="create" />
+            <p>Host to begin managing:</p>
+            <p><input type="text" name="host" value="" size="72" autofocus="autofocus" /></p>
+            <p>Source:</p>
+            <p>
+                <select name="source">
+                    {{ range .sources }}
+                        <option>{{ . }}</option>
+                    {{ end }}
+                </select>
+            </p>
+            <p><input type="submit" value="Submit" /></p>
+            {{ .csrfField }}
+        </form>
+    </body>
+</html>

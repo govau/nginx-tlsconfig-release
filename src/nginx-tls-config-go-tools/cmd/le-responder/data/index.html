@@ -1,0 +1,64 @@
+<html>
+    <head>
+        <title>Cert tool</title>
+        <script type="text/javascript">
+            function doItU(act, path) {
+                document.getElementById("path").value = path;
+                document.getElementById("action").value = act;
+                document.getElementById("f").submit();
+                return false;
+            }
+            function doItS(act, path) {
+                document.getElementById("Spath").value = path;
+                document.getElementById("Saction").value = act;
+                document.getElementById("Sf").submit();
+                return false;
+            }
+        </script>
+    </head>
+    <body>
+        <p>Hi {{ .user.EmailAddress }}, you are logged in! [ <a href="/logout">Logout (this)</a> | <a href="/logout?cf=1">Logout CF</a> ]</p>
+        {{ range .messages }}
+            <p style="padding:1em; border:1em; background: rgb(238, 183, 177);">{{ . }}</p>
+        {{ end }}
+        <form id="f" method="POST" action="/update">
+            <input id="path" type="hidden" name="path" />
+            <input id="action" type="hidden" name="action" />
+            {{ .csrfField }}
+        </form>
+        <form id="Sf" method="POST" action="/source">
+            <input id="Spath" type="hidden" name="path" />
+            <input id="Saction" type="hidden" name="action" />
+            {{ .csrfField }}
+        </form>
+        <p>Certificates managed:</p>
+        <table border="border">
+            <tr>
+                <th>Name</th>
+                <th>Days Remaining</th>
+                <th>Source</th>
+                <th>Challenge</th>
+                <th>Actions</th>
+            </tr>
+            {{ range .certs }}
+                <tr>
+                    <td><a href="https://{{ .Name }}">{{ .Name }}</a></td>
+                    <td>{{ .DaysRemaining }}</td>
+                    <td>{{ .CredHubCert.Source }} [ <a href="#" onclick="return doItS('source','{{ .Path }}');">Change</a> ]</td>
+                    <td>
+                        {{ if .CredHubCert.Challenge }}
+                            <pre>{{ .CredHubCert.Challenge.Instructions }}</pre>
+                            [ <a href="#" onclick="return doItU('complete','{{ .Path }}');">Complete</a> ]
+                        {{ end }}
+                    </td>
+                    <td>
+                        {{ if .ShowDelete }}[ <a href="#" onclick="return doItU('delete','{{ .Path }}');">Delete</a> ]{{ end }}
+                        {{ if .ShowRenew }}[ <a href="#" onclick="return doItU('auto','{{ .Path }}');">Renew</a> ]{{ end }}
+                        {{ if .ShowManual }}[ <a href="#" onclick="return doItU('manual','{{ .Path }}');">Manual</a> ]{{ end }}
+                    </td>
+                </tr>
+            {{ end }}
+        </table>
+        [ <a href="/add">Add</a> ]   
+    </body>
+</html>
