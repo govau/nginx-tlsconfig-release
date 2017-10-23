@@ -26,15 +26,15 @@ p('certs').each do |cert|
 ## Using EOF multi line instead of "echo -n" to avoid problems with quotes
 
 cat <<- "_EOF_<%= cert["name"] %>.ca.crt.key_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.chained.crt
-<%= cert["chain"] %>
+<%= cert["certificate"]["ca"] %>
 _EOF_<%= cert["name"] %>.ca.crt.key_
 
 cat <<- "_EOF_<%= cert["name"] %>.key_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.key
-<%= cert["private_key"] %>
+<%= cert["certificate"]["private_key"] %>
 _EOF_<%= cert["name"] %>.key_
 
 cat <<- "_EOF_<%= cert["name"] %>.crt_" > /${SSL_CERT_LOCATION}/<%= cert["name"] %>.crt
-<%= cert["certificate"] %>
+<%= cert["certificate"]["certificate"] %>
 _EOF_<%= cert["name"] %>.crt_
 
 cat <<- "_EOF_<%= cert["name"] %>.conf_" > /${NGINX_CONFIG_LOCATION}/<%= cert["name"] %>.conf
