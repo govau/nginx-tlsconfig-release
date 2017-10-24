@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"gopkg.in/yaml.v2"
+	yaml "gopkg.in/yaml.v2"
 )
 
 type config struct {
@@ -28,38 +31,109 @@ type config struct {
 		Server string `yaml:"server"` // added within each generated element
 	} `yaml:"template"`
 	Refresh struct {
-		ClientCert struct {
-			PrivateKey  string `yaml:"private_key"`
-			Certificate string `yaml:"certificate"`
-		} `yaml:"client_certificate"` // PEM cert to use to authenticate to credhub
+		ClientID      string `yaml:"client_id"`
+		ClientSecret  string `yaml:"client_secret"`
+		UAAURL        string `yaml:"uaa_url"`                // URL to access
+		UAACACert     string `yaml:"uaa_ca_certificate"`     // CA cert for credhub host
 		CredHubURL    string `yaml:"credhub_url"`            // URL to access
 		CredHubCACert string `yaml:"credhub_ca_certificate"` // CA cert for credhub host
 		Period        int    `yaml:"period"`                 // seconds between refresh attempts
 	} `yaml:"refresh"`
-	lastWritten string
-	configDir   string
+	lastWritten   string
+	configDir     string
+	uaaClient     *http.Client
+	credhubClient *http.Client
+	token         *oauthToken
+}
+
+type oauthToken struct {
+	AccessToken string `json:"access_token"`
+	Expiry      int64  `json:"expires_in"`
+}
+
+func newConf(configPath string) (*config, error) {
+	if configPath == "" {
+		return nil, errors.New("must specify a config path")
+	}
+
+	data, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+	var c config
+	err = yaml.Unmarshal(data, &c)
+	if err != nil {
+		return nil, err
+	}
+	c.configDir = filepath.Dir(configPath)
+
+	uaaCaCertPool := x509.NewCertPool()
+	credHubCaCertPool := x509.NewCertPool()
+
+	ok := uaaCaCertPool.AppendCertsFromPEM([]byte(c.Refresh.UAACACert))
+	if !ok {
+		return nil, errors.New("AppendCertsFromPEM was not ok")
+	}
+	ok = credHubCaCertPool.AppendCertsFromPEM([]byte(c.Refresh.CredHubCACert))
+	if !ok {
+		return nil, errors.New("AppendCertsFromPEM was not ok")
+	}
+
+	uaaTLS := &tls.Config{RootCAs: uaaCaCertPool}
+	credhubTLS := &tls.Config{RootCAs: credHubCaCertPool}
+
+	uaaTLS.BuildNameToCertificate()
+	credhubTLS.BuildNameToCertificate()
+
+	c.uaaClient = &http.Client{Transport: &http.Transport{TLSClientConfig: uaaTLS}}
+	c.credhubClient = &http.Client{Transport: &http.Transport{TLSClientConfig: credhubTLS}}
+
+	return &c, nil
 }
 
 func (c *config) ConnectToCredhub() error {
-	caCertPool := x509.NewCertPool()
-	ok := caCertPool.AppendCertsFromPEM([]byte(c.Refresh.CredHubCACert))
-	if !ok {
-		return errors.New("AppendCertsFromPEM was not ok")
+	if c.token == nil || time.Unix(c.token.Expiry, 0).Before(time.Now().Add(5*time.Minute)) {
+		r, err := http.NewRequest(http.MethodPost, c.Refresh.UAAURL+"/oauth/token", bytes.NewReader([]byte((&url.Values{
+			"client_id":     {c.Refresh.ClientID},
+			"client_secret": {c.Refresh.ClientSecret},
+			"grant_type":    {"client_credentials"},
+			"response_type": {"token"},
+		}).Encode())))
+		if err != nil {
+			return err
+		}
+		r.Header.Set("Accept", "application/json")
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		resp, err := c.uaaClient.Do(r)
+		if err != nil {
+			return err
+		}
+		data, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("not OK response from UAA: %s", data)
+		}
+
+		var at oauthToken
+		err = json.Unmarshal(data, &at)
+		if err != nil {
+			return err
+		}
+
+		c.token = &at
 	}
 
-	clientCert, err := tls.X509KeyPair([]byte(c.Refresh.ClientCert.Certificate), []byte(c.Refresh.ClientCert.PrivateKey))
+	req, err := http.NewRequest(http.MethodGet, c.Refresh.CredHubURL+"/api/v1/data", nil)
 	if err != nil {
 		return err
 	}
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{clientCert},
-		RootCAs:      caCertPool,
-	}
-	tlsConfig.BuildNameToCertificate()
-	transport := &http.Transport{TLSClientConfig: tlsConfig}
-	client := &http.Client{Transport: transport}
+	req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
 
-	resp, err := client.Get(c.Refresh.CredHubURL + "/api/v1/data")
+	resp, err := c.credhubClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -70,8 +144,7 @@ func (c *config) ConnectToCredhub() error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Error: %d\n%s\n", resp.StatusCode, string(contents))
-		return errors.New("bad response code from credhub")
+		return fmt.Errorf("not OK response from CredHub: %s", contents)
 	}
 
 	log.Printf("%s\n", string(contents))
@@ -94,12 +167,18 @@ func (c *config) ReloadNginx() error {
 	return process.Signal(syscall.SIGHUP)
 }
 
-func (c *config) UpdateConfig() error {
-	var perServer []string
+func (c *config) UpdateConfig(failEmpty bool) error {
+	nginxConfPath := c.configDir + "/nginx.conf"
 
+	var perServer []string
 	err := c.ConnectToCredhub()
 	if err != nil {
-		return err
+		if failEmpty {
+			err = nil
+		}
+		if err != nil {
+			return err
+		}
 	}
 
 	newConfig := fmt.Sprintf(`%s
@@ -113,18 +192,22 @@ func (c *config) UpdateConfig() error {
 		}`, c.Template.Global, c.Template.Events, c.Template.HTTP, strings.Join(perServer, "\n"))
 
 	if newConfig == c.lastWritten {
-		// TODO, if we have a new cert, we'll still need to reload later
-		log.Println("No changes detected, no reload")
 		return nil
 	}
 
-	err = ioutil.WriteFile(c.configDir+"/nginx.conf.new", []byte(newConfig), 0400)
+	err = ioutil.WriteFile(nginxConfPath+".new", []byte(newConfig), 0400)
 	if err != nil {
 		return err
 	}
 
 	// Now, rename it over the old one
-	return os.Rename(c.configDir+"/nginx.conf.new", c.configDir+"/nginx.conf")
+	err = os.Rename(nginxConfPath+".new", nginxConfPath)
+	if err != nil {
+		return err
+	}
+
+	c.lastWritten = newConfig
+	return nil
 }
 
 func main() {
@@ -135,25 +218,15 @@ func main() {
 	flag.BoolVar(&daemon, "daemon", false, "If set, run as a daemon, and reload pid each time")
 	flag.Parse()
 
-	if configPath == "" {
-		log.Fatal("must specify a config path")
-	}
-
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		log.Fatal("error reading config file", err)
-	}
-	var conf config
-	err = yaml.Unmarshal(data, &conf)
+	conf, err := newConf(configPath)
 	if err != nil {
 		log.Fatal("error parsing config file", err)
 	}
-	conf.configDir = filepath.Dir(configPath)
 
 	if daemon {
 		for {
 			log.Println("Updating config")
-			err = conf.UpdateConfig()
+			err = conf.UpdateConfig(false)
 			if err == nil {
 				err = conf.ReloadNginx()
 			}
@@ -164,8 +237,9 @@ func main() {
 		}
 	} else {
 		// once off, just update
-		err = conf.UpdateConfig()
+		err = conf.UpdateConfig(true)
 		if err != nil {
+			// this is usually ignored by the calling script
 			log.Fatal("error updating config:", err)
 		}
 	}
