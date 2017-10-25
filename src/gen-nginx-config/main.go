@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -39,11 +42,48 @@ type config struct {
 		CredHubCACert string `yaml:"credhub_ca_certificate"` // CA cert for credhub host
 		Period        int    `yaml:"period"`                 // seconds between refresh attempts
 	} `yaml:"refresh"`
-	lastWritten   string
-	configDir     string
-	uaaClient     *http.Client
-	credhubClient *http.Client
+	lastWritten string
+	configDir   string
+	credhub     *credhubClient
+}
+
+type credhubClient struct {
+	ClientID      string
+	ClientSecret  string
+	CredHubURL    string
+	UAAURL        string
+	UAAClient     *http.Client
+	CredHubClient *http.Client
 	token         *oauthToken
+}
+
+func newCredhubClient(c *config) (*credhubClient, error) {
+	uaaCaCertPool := x509.NewCertPool()
+	credHubCaCertPool := x509.NewCertPool()
+
+	ok := uaaCaCertPool.AppendCertsFromPEM([]byte(c.Refresh.UAACACert))
+	if !ok {
+		return nil, errors.New("AppendCertsFromPEM was not ok")
+	}
+	ok = credHubCaCertPool.AppendCertsFromPEM([]byte(c.Refresh.CredHubCACert))
+	if !ok {
+		return nil, errors.New("AppendCertsFromPEM was not ok")
+	}
+
+	uaaTLS := &tls.Config{RootCAs: uaaCaCertPool}
+	credhubTLS := &tls.Config{RootCAs: credHubCaCertPool}
+
+	uaaTLS.BuildNameToCertificate()
+	credhubTLS.BuildNameToCertificate()
+
+	return &credhubClient{
+		UAAClient:     &http.Client{Transport: &http.Transport{TLSClientConfig: uaaTLS}},
+		CredHubClient: &http.Client{Transport: &http.Transport{TLSClientConfig: credhubTLS}},
+		ClientID:      c.Refresh.ClientID,
+		ClientSecret:  c.Refresh.ClientSecret,
+		UAAURL:        c.Refresh.UAAURL,
+		CredHubURL:    c.Refresh.CredHubURL,
+	}, nil
 }
 
 type oauthToken struct {
@@ -67,35 +107,19 @@ func newConf(configPath string) (*config, error) {
 	}
 	c.configDir = filepath.Dir(configPath)
 
-	uaaCaCertPool := x509.NewCertPool()
-	credHubCaCertPool := x509.NewCertPool()
-
-	ok := uaaCaCertPool.AppendCertsFromPEM([]byte(c.Refresh.UAACACert))
-	if !ok {
-		return nil, errors.New("AppendCertsFromPEM was not ok")
+	c.credhub, err = newCredhubClient(&c)
+	if err != nil {
+		return nil, err
 	}
-	ok = credHubCaCertPool.AppendCertsFromPEM([]byte(c.Refresh.CredHubCACert))
-	if !ok {
-		return nil, errors.New("AppendCertsFromPEM was not ok")
-	}
-
-	uaaTLS := &tls.Config{RootCAs: uaaCaCertPool}
-	credhubTLS := &tls.Config{RootCAs: credHubCaCertPool}
-
-	uaaTLS.BuildNameToCertificate()
-	credhubTLS.BuildNameToCertificate()
-
-	c.uaaClient = &http.Client{Transport: &http.Transport{TLSClientConfig: uaaTLS}}
-	c.credhubClient = &http.Client{Transport: &http.Transport{TLSClientConfig: credhubTLS}}
 
 	return &c, nil
 }
 
-func (c *config) ConnectToCredhub() error {
-	if c.token == nil || time.Unix(c.token.Expiry, 0).Before(time.Now().Add(5*time.Minute)) {
-		r, err := http.NewRequest(http.MethodPost, c.Refresh.UAAURL+"/oauth/token", bytes.NewReader([]byte((&url.Values{
-			"client_id":     {c.Refresh.ClientID},
-			"client_secret": {c.Refresh.ClientSecret},
+func (ch *credhubClient) MakeRequest(path string, params url.Values, rv interface{}) error {
+	if ch.token == nil || time.Unix(ch.token.Expiry, 0).Before(time.Now().Add(5*time.Minute)) {
+		r, err := http.NewRequest(http.MethodPost, ch.UAAURL+"/oauth/token", bytes.NewReader([]byte((&url.Values{
+			"client_id":     {ch.ClientID},
+			"client_secret": {ch.ClientSecret},
 			"grant_type":    {"client_credentials"},
 			"response_type": {"token"},
 		}).Encode())))
@@ -105,7 +129,7 @@ func (c *config) ConnectToCredhub() error {
 		r.Header.Set("Accept", "application/json")
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-		resp, err := c.uaaClient.Do(r)
+		resp, err := ch.UAAClient.Do(r)
 		if err != nil {
 			return err
 		}
@@ -124,16 +148,17 @@ func (c *config) ConnectToCredhub() error {
 			return err
 		}
 
-		c.token = &at
+		ch.token = &at
 	}
 
-	req, err := http.NewRequest(http.MethodGet, c.Refresh.CredHubURL+"/api/v1/data", nil)
+	req, err := http.NewRequest(http.MethodGet, ch.CredHubURL+path+"?"+params.Encode(), nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
 
-	resp, err := c.credhubClient.Do(req)
+	req.Header.Set("Authorization", "Bearer "+ch.token.AccessToken)
+
+	resp, err := ch.CredHubClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -147,8 +172,7 @@ func (c *config) ConnectToCredhub() error {
 		return fmt.Errorf("not OK response from CredHub: %s", contents)
 	}
 
-	log.Printf("%s\n", string(contents))
-	return nil
+	return json.Unmarshal(contents, rv)
 }
 
 func (c *config) ReloadNginx() error {
@@ -167,11 +191,114 @@ func (c *config) ReloadNginx() error {
 	return process.Signal(syscall.SIGHUP)
 }
 
-func (c *config) UpdateConfig(failEmpty bool) error {
-	nginxConfPath := c.configDir + "/nginx.conf"
+type credhubCert struct {
+	CA          string `json:"ca"`
+	Certificate string `json:"certificate"`
+	PrivateKey  string `json:"private_key"`
+}
 
-	var perServer []string
-	err := c.ConnectToCredhub()
+var (
+	errNoDNSFound = errors.New("no dns names found in cert")
+)
+
+func (c *config) MakeConfForCert(cert *credhubCert) (string, error) {
+	block, _ := pem.Decode([]byte(cert.Certificate))
+	if block == nil {
+		return "", errors.New("no cert found in pem")
+	}
+	if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+		return "", errors.New("invalid cert found in pem")
+	}
+
+	pc, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", err
+	}
+
+	if len(pc.DNSNames) == 0 {
+		return "", errNoDNSFound
+	}
+
+	// We'll just hash the cert content for the filename
+	hc := sha256.Sum256(block.Bytes)
+
+	nameOfFile := hex.EncodeToString(hc[:]) + ".crt"
+	err = c.SaveSafe(nameOfFile, []byte(strings.Join([]string{cert.PrivateKey, cert.Certificate, cert.CA}, "\n")))
+	if err != nil {
+		return "", nil
+	}
+
+	return fmt.Sprintf(`server {
+		server_name %s;
+		ssl_certificate %s/%s;
+		%s
+	}`, strings.Join(pc.DNSNames, " "), c.configDir, nameOfFile, c.Template.Server), nil
+
+}
+
+func (c *config) GetServerConf() ([]string, error) {
+	var resp struct {
+		Credentials []struct {
+			Name string `json:"name"`
+		} `json:"credentials"`
+	}
+	err := c.credhub.MakeRequest("/api/v1/data", url.Values{"path": {"/certs"}}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	var rv []string
+	for _, cred := range resp.Credentials {
+		var cr struct {
+			Data []struct {
+				Value credhubCert `json:"value"`
+			} `json:"data"`
+		}
+		err := c.credhub.MakeRequest("/api/v1/data", url.Values{
+			"name":    {cred.Name},
+			"current": {"true"},
+		}, &cr)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range cr.Data {
+			nginxConf, err := c.MakeConfForCert(&v.Value)
+			switch err {
+			case nil:
+				rv = append(rv, nginxConf)
+			case errNoDNSFound:
+				log.Println("No DNS found in cert, skipping:", cred.Name)
+			default:
+				return nil, err
+			}
+		}
+	}
+
+	return rv, nil
+}
+
+func (c *config) SaveSafe(name string, data []byte) error {
+	fpath := filepath.Join(c.configDir, name)
+
+	// See if we can avoid...
+	oldData, err := ioutil.ReadFile(fpath)
+	if err == nil {
+		if bytes.Equal(oldData, data) {
+			return nil // all done here
+		}
+	}
+
+	// Write to new file
+	err = ioutil.WriteFile(fpath+".new", data, 0400)
+	if err != nil {
+		return err
+	}
+
+	// Rename over old file, which is meant to be somewhat "atomic" sometimes...
+	return os.Rename(fpath+".new", fpath)
+}
+
+func (c *config) UpdateConfig(failEmpty bool) error {
+	perServer, err := c.GetServerConf()
 	if err != nil {
 		if failEmpty {
 			err = nil
@@ -181,7 +308,7 @@ func (c *config) UpdateConfig(failEmpty bool) error {
 		}
 	}
 
-	newConfig := fmt.Sprintf(`%s
+	return c.SaveSafe("nginx.conf", []byte(fmt.Sprintf(`%s
 		events {
 			%s
 		}
@@ -189,25 +316,7 @@ func (c *config) UpdateConfig(failEmpty bool) error {
 		http {
 			%s
 			%s
-		}`, c.Template.Global, c.Template.Events, c.Template.HTTP, strings.Join(perServer, "\n"))
-
-	if newConfig == c.lastWritten {
-		return nil
-	}
-
-	err = ioutil.WriteFile(nginxConfPath+".new", []byte(newConfig), 0400)
-	if err != nil {
-		return err
-	}
-
-	// Now, rename it over the old one
-	err = os.Rename(nginxConfPath+".new", nginxConfPath)
-	if err != nil {
-		return err
-	}
-
-	c.lastWritten = newConfig
-	return nil
+		}`, c.Template.Global, c.Template.Events, c.Template.HTTP, strings.Join(perServer, "\n"))))
 }
 
 func main() {
