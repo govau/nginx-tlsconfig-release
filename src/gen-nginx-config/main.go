@@ -42,9 +42,8 @@ type config struct {
 		CredHubCACert string `yaml:"credhub_ca_certificate"` // CA cert for credhub host
 		Period        int    `yaml:"period"`                 // seconds between refresh attempts
 	} `yaml:"refresh"`
-	lastWritten string
-	configDir   string
-	credhub     *credhubClient
+	configDir string
+	credhub   *credhubClient
 }
 
 type credhubClient struct {
@@ -266,7 +265,7 @@ func (c *config) GetServerConf() ([]string, error) {
 			case nil:
 				rv = append(rv, nginxConf)
 			case errNoDNSFound:
-				log.Println("No DNS found in cert, skipping:", cred.Name)
+				log.Println("No DNS found in cert, skipping: ", cred.Name)
 			default:
 				return nil, err
 			}
