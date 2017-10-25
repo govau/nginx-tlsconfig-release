@@ -200,42 +200,55 @@ var (
 	errNoDNSFound = errors.New("no dns names found in cert")
 )
 
-func (c *config) MakeConfForCert(cert *credhubCert) (string, error) {
+func (c *config) MakeConfForCert(cert *credhubCert) (bool, string, error) {
 	block, _ := pem.Decode([]byte(cert.Certificate))
 	if block == nil {
-		return "", errors.New("no cert found in pem")
+		return false, "", errors.New("no cert found in pem")
 	}
 	if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
-		return "", errors.New("invalid cert found in pem")
+		return false, "", errors.New("invalid cert found in pem")
 	}
 
 	pc, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return "", err
+		return false, "", err
 	}
 
 	if len(pc.DNSNames) == 0 {
-		return "", errNoDNSFound
+		return false, "", errNoDNSFound
 	}
 
 	// We'll just hash the cert content for the filename
 	hc := sha256.Sum256(block.Bytes)
 
-	nameOfFile := hex.EncodeToString(hc[:]) + ".crt"
-	err = c.SaveSafe(nameOfFile, []byte(strings.Join([]string{cert.PrivateKey, cert.Certificate, cert.CA}, "\n")))
+	rv := false
+
+	nameOfFile := hex.EncodeToString(hc[:])
+	dirty, err := c.SaveSafe(nameOfFile+".key", []byte(strings.TrimSpace(cert.PrivateKey)+"\n"))
 	if err != nil {
-		return "", nil
+		return false, "", err
+	}
+	if dirty {
+		rv = true
+	}
+	dirty, err = c.SaveSafe(nameOfFile+".crt", []byte(strings.TrimSpace(cert.Certificate)+"\n"+strings.TrimSpace(cert.CA)+"\n"))
+	if err != nil {
+		return false, "", err
+	}
+	if dirty {
+		rv = true
 	}
 
-	return fmt.Sprintf(`server {
+	return rv, fmt.Sprintf(`server {
 		server_name %s;
-		ssl_certificate %s/%s;
+		ssl_certificate %s/%s.crt;
+		ssl_certificate_key %s/%s.key;
 		%s
-	}`, strings.Join(pc.DNSNames, " "), c.configDir, nameOfFile, c.Template.Server), nil
+	}`, strings.Join(pc.DNSNames, " "), c.configDir, nameOfFile, c.configDir, nameOfFile, c.Template.Server), nil
 
 }
 
-func (c *config) GetServerConf() ([]string, error) {
+func (c *config) GetServerConf() (bool, []string, error) {
 	var resp struct {
 		Credentials []struct {
 			Name string `json:"name"`
@@ -243,9 +256,10 @@ func (c *config) GetServerConf() ([]string, error) {
 	}
 	err := c.credhub.MakeRequest("/api/v1/data", url.Values{"path": {"/certs"}}, &resp)
 	if err != nil {
-		return nil, err
+		return false, nil, err
 	}
 	var rv []string
+	retDirty := false
 	for _, cred := range resp.Credentials {
 		var cr struct {
 			Data []struct {
@@ -257,57 +271,72 @@ func (c *config) GetServerConf() ([]string, error) {
 			"current": {"true"},
 		}, &cr)
 		if err != nil {
-			return nil, err
+			return false, nil, err
 		}
 		for _, v := range cr.Data {
-			nginxConf, err := c.MakeConfForCert(&v.Value)
+			dirty, nginxConf, err := c.MakeConfForCert(&v.Value)
 			switch err {
 			case nil:
 				rv = append(rv, nginxConf)
 			case errNoDNSFound:
 				log.Println("No DNS found in cert, skipping: ", cred.Name)
 			default:
-				return nil, err
+				return false, nil, err
+			}
+			if dirty {
+				retDirty = true
 			}
 		}
 	}
 
-	return rv, nil
+	return retDirty, rv, nil
 }
 
-func (c *config) SaveSafe(name string, data []byte) error {
+// Returns (did we write a new file)
+func (c *config) SaveSafe(name string, data []byte) (bool, error) {
 	fpath := filepath.Join(c.configDir, name)
 
 	// See if we can avoid...
 	oldData, err := ioutil.ReadFile(fpath)
 	if err == nil {
 		if bytes.Equal(oldData, data) {
-			return nil // all done here
+			return false, nil // all done here
 		}
 	}
 
 	// Write to new file
 	err = ioutil.WriteFile(fpath+".new", data, 0400)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Rename over old file, which is meant to be somewhat "atomic" sometimes...
-	return os.Rename(fpath+".new", fpath)
+	err = os.Rename(fpath+".new", fpath)
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
-func (c *config) UpdateConfig(failEmpty bool) error {
-	perServer, err := c.GetServerConf()
+func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
+	retDirty := false
+
+	dirty, perServer, err := c.GetServerConf()
 	if err != nil {
 		if failEmpty {
 			err = nil
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 
-	return c.SaveSafe("nginx.conf", []byte(fmt.Sprintf(`%s
+	if dirty {
+		retDirty = true
+	}
+
+	dirty, err = c.SaveSafe("nginx.conf", []byte(fmt.Sprintf(`%s
 		events {
 			%s
 		}
@@ -316,6 +345,15 @@ func (c *config) UpdateConfig(failEmpty bool) error {
 			%s
 			%s
 		}`, c.Template.Global, c.Template.Events, c.Template.HTTP, strings.Join(perServer, "\n"))))
+	if err != nil {
+		return false, err
+	}
+
+	if dirty {
+		retDirty = true
+	}
+
+	return retDirty, nil
 }
 
 func main() {
@@ -334,9 +372,11 @@ func main() {
 	if daemon {
 		for {
 			log.Println("Updating config")
-			err = conf.UpdateConfig(false)
+			dirty, err := conf.UpdateConfig(false)
 			if err == nil {
-				err = conf.ReloadNginx()
+				if dirty { // only reload if we actually changed a file on disk, and fully succeeded
+					err = conf.ReloadNginx()
+				}
 			}
 			if err != nil {
 				log.Println("Error updating config, will keep previous config and ignore error:", err)
@@ -345,7 +385,7 @@ func main() {
 		}
 	} else {
 		// once off, just update
-		err = conf.UpdateConfig(true)
+		_, err = conf.UpdateConfig(true)
 		if err != nil {
 			// this is usually ignored by the calling script
 			log.Fatal("error updating config:", err)

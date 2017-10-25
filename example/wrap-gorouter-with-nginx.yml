@@ -213,7 +213,7 @@
               }
             }
 
-          server:
+          server: |
             # server_name, ssl_certificate, ssl_certificate_key add automatically
             listen 8452 ssl;
             ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
