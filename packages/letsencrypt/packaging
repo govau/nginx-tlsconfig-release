@@ -1,6 +1,0 @@
-# abort script on any command that exits with a non zero value
-set -e
-
-mkdir $BOSH_INSTALL_TARGET/bin
-cp acme_tiny.py $BOSH_INSTALL_TARGET/bin
-chmod +x $BOSH_INSTALL_TARGET/bin/acme_tiny.py
