@@ -28,12 +28,13 @@ import (
 type config struct {
 	NginxJob string `yaml:"nginx_job"` // name of nginx jobs
 	Template struct {
-		ResponseHost string `yaml:"responder"` // will be resolved and added
-		Global       string `yaml:"global"`    // added to global
-		Events       string `yaml:"events"`    // added to events element
-		HTTP         string `yaml:"http"`      // added to http element
-		ACME         string `yaml:"acme"`      // added to http element
-		Server       string `yaml:"server"`    // added within each generated element
+		ResponseHost string `yaml:"responder"`  // will be resolved and added
+		Global       string `yaml:"global"`     // added to global
+		Events       string `yaml:"events"`     // added to events element
+		HTTP         string `yaml:"http"`       // added to http element
+		ACME         string `yaml:"acme"`       // added to http element
+		Server       string `yaml:"server"`     // added within each generated element
+		NoTLSYet     string `yaml:"pre_server"` // adeded if no other valid server conf exists
 	} `yaml:"template"`
 	CredHub   credhub.Client `yaml:"credhub"`
 	Period    int            `yaml:"period"` // seconds between refresh attempts
@@ -219,8 +220,10 @@ func (c *config) SaveSafe(name string, data []byte) (bool, error) {
 
 func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 	retDirty := false
+	sslInfoValid := false
 
 	dirty, perServer, err := c.GetServerConf()
+	sslInfoValid = (err == nil)
 	if err != nil {
 		if failEmpty {
 			err = nil
@@ -252,6 +255,18 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 		acme = strings.Replace(c.Template.ACME, "IP_ADDR", ips[0].String(), 1)
 	}
 
+	// Listening for SSL is our health indicator to the load balancer,
+	// so we only want to do this if we are confident our config is correct.
+	// We need to listen if empty, else we won't get HTTP requests though
+	sslConf := ""
+	if sslInfoValid {
+		if len(perServer) == 0 {
+			sslConf = c.Template.NoTLSYet
+		} else {
+			sslConf = strings.Join(perServer, "\n")
+		}
+	}
+
 	dirty, err = c.SaveSafe("nginx.conf", []byte(fmt.Sprintf(`%s
 		events {
 			%s
@@ -266,7 +281,7 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 				%s
 			}
 			%s
-		}`, c.Template.Global, c.Template.Events, acme, c.Template.HTTP, strings.Join(perServer, "\n"))))
+		}`, c.Template.Global, c.Template.Events, acme, c.Template.HTTP, sslConf)))
 	if err != nil {
 		return false, err
 	}
