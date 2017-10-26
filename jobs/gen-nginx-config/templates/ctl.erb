@@ -15,7 +15,7 @@ case $1 in
 
     echo $$ > $PIDFILE
 
-    exec /var/vcap/packages/nginx-tls-conf-go-tools/bin/gen-nginx-config -daemon -config $CONF_DIR/config.yml \
+    exec /var/vcap/packages/nginx-tls-config-go-tools/bin/gen-nginx-config -daemon -config $CONF_DIR/config.yml \
       >>  $LOG_DIR/gen-nginx-config.stdout.log \
       2>> $LOG_DIR/gen-nginx-config.stderr.log
 
