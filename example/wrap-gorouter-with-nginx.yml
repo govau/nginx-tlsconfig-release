@@ -11,7 +11,7 @@
 - type: replace
   path: /releases/-
   value:
-    name: adam
+    name: nginx-tlsconfig
     version: latest
 
 # Pull in latest version of CredHub for our instance
@@ -147,7 +147,7 @@
   path: /instance_groups/name=router/jobs/-
   value:
     name: gen-nginx-config
-    release: adam
+    release: nginx-tlsconfig
     properties:
       config:
         nginx_job: nginx

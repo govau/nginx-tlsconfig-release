@@ -1,0 +1,8 @@
+---
+name: nginx-tls-config-go-tools
+
+dependencies:
+- golang
+
+files:
+- nginx-tls-config-go-tools/**/*.go

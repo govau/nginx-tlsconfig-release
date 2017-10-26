@@ -3,17 +3,14 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +18,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/govau/cf-common/credhub"
 
 	yaml "gopkg.in/yaml.v2"
 )
@@ -33,56 +32,9 @@ type config struct {
 		HTTP   string `yaml:"http"`   // added to http element
 		Server string `yaml:"server"` // added within each generated element
 	} `yaml:"template"`
-	Refresh struct {
-		ClientID      string `yaml:"client_id"`
-		ClientSecret  string `yaml:"client_secret"`
-		UAAURL        string `yaml:"uaa_url"`                // URL to access
-		UAACACert     string `yaml:"uaa_ca_certificate"`     // CA cert for credhub host
-		CredHubURL    string `yaml:"credhub_url"`            // URL to access
-		CredHubCACert string `yaml:"credhub_ca_certificate"` // CA cert for credhub host
-		Period        int    `yaml:"period"`                 // seconds between refresh attempts
-	} `yaml:"refresh"`
+	CredHub   credhub.Client `yaml:"credhub"`
+	Period    int            `yaml:"period"` // seconds between refresh attempts
 	configDir string
-	credhub   *credhubClient
-}
-
-type credhubClient struct {
-	ClientID      string
-	ClientSecret  string
-	CredHubURL    string
-	UAAURL        string
-	UAAClient     *http.Client
-	CredHubClient *http.Client
-	token         *oauthToken
-}
-
-func newCredhubClient(c *config) (*credhubClient, error) {
-	uaaCaCertPool := x509.NewCertPool()
-	credHubCaCertPool := x509.NewCertPool()
-
-	ok := uaaCaCertPool.AppendCertsFromPEM([]byte(c.Refresh.UAACACert))
-	if !ok {
-		return nil, errors.New("AppendCertsFromPEM was not ok")
-	}
-	ok = credHubCaCertPool.AppendCertsFromPEM([]byte(c.Refresh.CredHubCACert))
-	if !ok {
-		return nil, errors.New("AppendCertsFromPEM was not ok")
-	}
-
-	uaaTLS := &tls.Config{RootCAs: uaaCaCertPool}
-	credhubTLS := &tls.Config{RootCAs: credHubCaCertPool}
-
-	uaaTLS.BuildNameToCertificate()
-	credhubTLS.BuildNameToCertificate()
-
-	return &credhubClient{
-		UAAClient:     &http.Client{Transport: &http.Transport{TLSClientConfig: uaaTLS}},
-		CredHubClient: &http.Client{Transport: &http.Transport{TLSClientConfig: credhubTLS}},
-		ClientID:      c.Refresh.ClientID,
-		ClientSecret:  c.Refresh.ClientSecret,
-		UAAURL:        c.Refresh.UAAURL,
-		CredHubURL:    c.Refresh.CredHubURL,
-	}, nil
 }
 
 type oauthToken struct {
@@ -105,73 +57,12 @@ func newConf(configPath string) (*config, error) {
 		return nil, err
 	}
 	c.configDir = filepath.Dir(configPath)
-
-	c.credhub, err = newCredhubClient(&c)
+	err = c.CredHub.Init()
 	if err != nil {
 		return nil, err
 	}
 
 	return &c, nil
-}
-
-func (ch *credhubClient) MakeRequest(path string, params url.Values, rv interface{}) error {
-	if ch.token == nil || time.Unix(ch.token.Expiry, 0).Before(time.Now().Add(5*time.Minute)) {
-		r, err := http.NewRequest(http.MethodPost, ch.UAAURL+"/oauth/token", bytes.NewReader([]byte((&url.Values{
-			"client_id":     {ch.ClientID},
-			"client_secret": {ch.ClientSecret},
-			"grant_type":    {"client_credentials"},
-			"response_type": {"token"},
-		}).Encode())))
-		if err != nil {
-			return err
-		}
-		r.Header.Set("Accept", "application/json")
-		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-		resp, err := ch.UAAClient.Do(r)
-		if err != nil {
-			return err
-		}
-		data, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return err
-		}
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("not OK response from UAA: %s", data)
-		}
-
-		var at oauthToken
-		err = json.Unmarshal(data, &at)
-		if err != nil {
-			return err
-		}
-
-		ch.token = &at
-	}
-
-	req, err := http.NewRequest(http.MethodGet, ch.CredHubURL+path+"?"+params.Encode(), nil)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+ch.token.AccessToken)
-
-	resp, err := ch.CredHubClient.Do(req)
-	if err != nil {
-		return err
-	}
-	contents, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("not OK response from CredHub: %s", contents)
-	}
-
-	return json.Unmarshal(contents, rv)
 }
 
 func (c *config) ReloadNginx() error {
@@ -254,7 +145,7 @@ func (c *config) GetServerConf() (bool, []string, error) {
 			Name string `json:"name"`
 		} `json:"credentials"`
 	}
-	err := c.credhub.MakeRequest("/api/v1/data", url.Values{"path": {"/certs"}}, &resp)
+	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{"path": {"/certs"}}, &resp)
 	if err != nil {
 		return false, nil, err
 	}
@@ -266,7 +157,7 @@ func (c *config) GetServerConf() (bool, []string, error) {
 				Value credhubCert `json:"value"`
 			} `json:"data"`
 		}
-		err := c.credhub.MakeRequest("/api/v1/data", url.Values{
+		err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
 			"name":    {cred.Name},
 			"current": {"true"},
 		}, &cr)
@@ -381,7 +272,7 @@ func main() {
 			if err != nil {
 				log.Println("Error updating config, will keep previous config and ignore error:", err)
 			}
-			time.Sleep(time.Duration(conf.Refresh.Period) * time.Second)
+			time.Sleep(time.Duration(conf.Period) * time.Second)
 		}
 	} else {
 		// once off, just update

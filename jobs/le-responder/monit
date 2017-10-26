@@ -1,0 +1,5 @@
+check process le-responder
+  with pidfile /var/vcap/sys/run/le-responder/pid
+  start program "/var/vcap/jobs/le-responder/bin/ctl start"
+  stop program "/var/vcap/jobs/le-responder/bin/ctl stop"
+  group vcap
