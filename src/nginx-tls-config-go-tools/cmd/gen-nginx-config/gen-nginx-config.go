@@ -148,6 +148,7 @@ func (c *config) MakeConfForCert(cert *credhubCert) (bool, string, error) {
 }
 
 func (c *config) GetServerConf() (bool, []string, error) {
+	// TODO - return an error if the certs returned have any overlap
 	var resp struct {
 		Credentials []struct {
 			Name string `json:"name"`
