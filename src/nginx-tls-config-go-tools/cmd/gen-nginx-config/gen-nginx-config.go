@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -27,10 +28,12 @@ import (
 type config struct {
 	NginxJob string `yaml:"nginx_job"` // name of nginx jobs
 	Template struct {
-		Global string `yaml:"global"` // added to global
-		Events string `yaml:"events"` // added to events element
-		HTTP   string `yaml:"http"`   // added to http element
-		Server string `yaml:"server"` // added within each generated element
+		ResponseHost string `yaml:"responder"` // will be resolved and added
+		Global       string `yaml:"global"`    // added to global
+		Events       string `yaml:"events"`    // added to events element
+		HTTP         string `yaml:"http"`      // added to http element
+		ACME         string `yaml:"acme"`      // added to http element
+		Server       string `yaml:"server"`    // added within each generated element
 	} `yaml:"template"`
 	CredHub   credhub.Client `yaml:"credhub"`
 	Period    int            `yaml:"period"` // seconds between refresh attempts
@@ -231,15 +234,39 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 		retDirty = true
 	}
 
+	ips, err := net.LookupIP(c.Template.ResponseHost)
+	if err != nil {
+		if failEmpty {
+			err = nil
+		} else {
+			return false, err
+		}
+	}
+
+	acme := ""
+	if len(ips) == 0 {
+		if !failEmpty {
+			return false, errors.New("cannot resolve responder")
+		}
+	} else {
+		acme = strings.Replace(c.Template.ACME, "IP_ADDR", ips[0].String(), 1)
+	}
+
 	dirty, err = c.SaveSafe("nginx.conf", []byte(fmt.Sprintf(`%s
 		events {
 			%s
 		}
 
 		http {
+			server {
+				# ACME first, if available
+				%s
+
+				# Then other HTTP
+				%s
+			}
 			%s
-			%s
-		}`, c.Template.Global, c.Template.Events, c.Template.HTTP, strings.Join(perServer, "\n"))))
+		}`, c.Template.Global, c.Template.Events, acme, c.Template.HTTP, strings.Join(perServer, "\n"))))
 	if err != nil {
 		return false, err
 	}
