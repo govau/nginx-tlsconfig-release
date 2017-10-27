@@ -631,6 +631,12 @@ func main() {
 			BaseURL:        conf.Admin.ExternalURL,
 			ExternalUAAURL: conf.Admin.UAA.ExternalURL,
 			Logger:         log.New(os.Stderr, "", log.LstdFlags),
+			ShouldIgnore: func(r *http.Request) bool {
+				if r.URL.Path == "/favicon.ico" {
+					return true
+				}
+				return false
+			},
 		}).Wrap(conf.createAdminHandler()))
 
 		if !conf.ACME.Disable {
