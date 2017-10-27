@@ -194,7 +194,7 @@ func (c *config) GetServerConf(admin string) (bool, []string, error) {
 		for _, v := range cr.Data {
 			specialConfig := c.Template.Server
 			if cred == conf.Data[0].Value.OurCert {
-				specialConfig = c.Template.AdminServerConfig
+				specialConfig = admin
 			}
 			dirty, nginxConf, err := c.MakeConfForCert(&v.Value, specialConfig)
 			switch err {
