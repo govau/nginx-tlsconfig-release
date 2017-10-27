@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -27,6 +28,7 @@ type config struct {
 		} `yaml:"key"`
 		URL               string `yaml:"url"`
 		DaysBeforeToRenew int    `yaml:"days_before"`
+		EmailContact      string `yaml:"email"`
 	} `yaml:"acme"`
 	Port         int `yaml:"port"`
 	Certificates []struct {
@@ -34,7 +36,8 @@ type config struct {
 		ChallengeType string   `yaml:"challenge"`
 	} `yaml:"certificates"`
 
-	acmeClient *acme.Client
+	acmeClient  *acme.Client
+	acmeAccount *acme.Account
 }
 
 type certsInCredhub map[string][]*x509.Certificate
@@ -53,7 +56,7 @@ func (cic certsInCredhub) getLongestUntilExpiry(hn string) *x509.Certificate {
 	return rv
 }
 
-func (c *config) doThing() error {
+func (c *config) ensureAuthorized() error {
 	hostToCerts, err := c.getCertsByHostname()
 	if err != nil {
 		return err
@@ -72,7 +75,13 @@ func (c *config) doThing() error {
 		}
 
 		if !allGood {
-			c.acmeClient.
+			for _, dns := range wantedCert.Hostnames {
+				authz, err := c.acmeClient.Authorize(context.Background(), dns)
+				if err != nil {
+					return err
+				}
+				log.Printf("Authz: %#v\n", authz)
+			}
 		}
 	}
 
@@ -132,6 +141,46 @@ type credhubCert struct {
 	PrivateKey  string `json:"private_key"`
 }
 
+type perm struct {
+	Actor      string   `json:"actor"`
+	Operations []string `json:"operations"`
+}
+
+func (c *config) saveAccount(acc *acme.Account) error {
+	var rv map[string]interface{}
+	return c.CredHub.PutRequest("/api/v1/data", struct {
+		Name      string        `json:"name"`
+		Type      string        `json:"type"`
+		Overwrite bool          `json:"overwrite"`
+		Value     *acme.Account `json:"value"`
+		Perms     []perm        `json:"additional_permissions"`
+	}{
+		Name:      "/acme/account",
+		Type:      "json",
+		Overwrite: true,
+		Value:     acc,
+	}, &rv)
+}
+
+func (c *config) fetchAccount() (*acme.Account, error) {
+	var cr struct {
+		Data []struct {
+			Value acme.Account `json:"value"`
+		} `json:"data"`
+	}
+	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
+		"name":    {"/acme/account"},
+		"current": {"true"},
+	}, &cr)
+	if err != nil {
+		return nil, err
+	}
+	if len(cr.Data) != 1 {
+		return nil, errors.New("wrong number of accounts returned")
+	}
+	return &cr.Data[0].Value, nil
+}
+
 func newConf(configPath string) (*config, error) {
 	if configPath == "" {
 		return nil, errors.New("must specify a config path")
@@ -169,6 +218,14 @@ func newConf(configPath string) (*config, error) {
 		DirectoryURL: c.ACME.URL,
 	}
 
+	// Always try to register, who cares if we already have...
+	c.acmeAccount, err = c.acmeClient.Register(context.Background(), &acme.Account{
+		Contact: []string{"mailto:" + c.ACME.EmailContact},
+	}, acme.AcceptTOS)
+	if err != nil {
+		log.Println("Error registering with LE - we've likely already done so, ignoring:", err)
+	}
+
 	return &c, nil
 }
 
@@ -183,6 +240,11 @@ func main() {
 	conf, err := newConf(configPath)
 	if err != nil {
 		log.Fatal("error parsing config file", err)
+	}
+
+	err = conf.ensureAuthorized()
+	if err != nil {
+		log.Println(err.Error())
 	}
 
 	if daemon {
