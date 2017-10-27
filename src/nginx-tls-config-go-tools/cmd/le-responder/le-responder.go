@@ -589,7 +589,7 @@ func (c *config) wrapWithClient(tmpl string, f func(vars map[string]string, liu 
 
 func (c *config) createAdminHandler() http.Handler {
 	r := mux.NewRouter()
-	r.HandleFunc("/", c.wrapWithClient("home", c.home))
+	r.HandleFunc("/", c.wrapWithClient("index.html", c.home))
 
 	// Wrap nearly everything with a CSRF
 	var opts []csrf.Option
