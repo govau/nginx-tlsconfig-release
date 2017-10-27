@@ -9,5 +9,5 @@ mkdir -p ${BOSH_INSTALL_TARGET}/bin
 # Rename vendor to src so that we can use the parent dir as a GOPATH
 ln -s ${BOSH_COMPILE_TARGET}/nginx-tls-config-go-tools/vendor ${BOSH_COMPILE_TARGET}/nginx-tls-config-go-tools/src
 
-go build -o ${BOSH_INSTALL_TARGET}/bin/gen-nginx-config ${BOSH_COMPILE_TARGET}/nginx-tls-config-go-tools/cmd/gen-nginx-config/gen-nginx-config.go
-go build -o ${BOSH_INSTALL_TARGET}/bin/le-responder     ${BOSH_COMPILE_TARGET}/nginx-tls-config-go-tools/cmd/le-responder/le-responder.go
+go build -o ${BOSH_INSTALL_TARGET}/bin/gen-nginx-config ${BOSH_COMPILE_TARGET}/nginx-tls-config-go-tools/cmd/gen-nginx-config/*.go
+go build -o ${BOSH_INSTALL_TARGET}/bin/le-responder     ${BOSH_COMPILE_TARGET}/nginx-tls-config-go-tools/cmd/le-responder/*.go

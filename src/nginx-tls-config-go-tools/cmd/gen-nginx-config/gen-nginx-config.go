@@ -69,7 +69,7 @@ func newConf(configPath string) (*config, error) {
 	}
 
 	if c.Period == 0 {
-		return nil, errors.New("you must specify a refresh period of at least 1 second.")
+		return nil, errors.New("you must specify a refresh period of at least 1 second")
 	}
 
 	return &c, nil

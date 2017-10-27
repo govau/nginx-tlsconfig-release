@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"golang.org/x/crypto/acme"
@@ -330,12 +331,14 @@ func main() {
 				CACerts:      conf.Admin.UAA.CACerts,
 				ClientID:     conf.Admin.UAA.ClientID,
 				ClientSecret: conf.Admin.UAA.ClientSecret,
+				ExternalURL:  conf.Admin.UAA.ExternalURL,
 			},
 			Scopes: []string{
 				"openid",
 			},
 			BaseURL:        conf.Admin.ExternalURL,
 			ExternalUAAURL: conf.Admin.UAA.ExternalURL,
+			Logger:         log.New(os.Stderr, "", log.LstdFlags),
 		}).Wrap(conf.createAdminHandler()))
 
 		// Start actual responder

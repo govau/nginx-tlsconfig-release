@@ -67,6 +67,9 @@ type Client struct {
 	// URL is the URL to UAA, e.g. https://uaa.system.example.com.
 	URL string
 
+	// Used for authorize redirects, and issuer validation
+	ExternalURL string
+
 	ClientID     string
 	ClientSecret string
 
@@ -136,11 +139,14 @@ func NewClientFromAPIURL(apiEndpoint string) (*Client, error) {
 		return nil, errors.New("no uaa URL returned")
 	}
 
-	return &Client{URL: u}, nil
+	return &Client{
+		URL:         u,
+		ExternalURL: u,
+	}, nil
 }
 
 func (c *Client) GetAuthorizeEndpoint() string {
-	return c.URL + "/oauth/authorize"
+	return c.ExternalURL + "/oauth/authorize"
 }
 
 func (c *Client) GetTokenEndpoint() string {
@@ -316,7 +322,7 @@ func (c *Client) ValidateAccessToken(at, expectedClientID string) (jwt.MapClaims
 		return nil, errors.New("bad token 2")
 	}
 
-	if !mapClaims.VerifyIssuer(c.URL+"/oauth/token", true) {
+	if !mapClaims.VerifyIssuer(c.ExternalURL+"/oauth/token", true) {
 		return nil, errors.New("bad token 3")
 	}
 

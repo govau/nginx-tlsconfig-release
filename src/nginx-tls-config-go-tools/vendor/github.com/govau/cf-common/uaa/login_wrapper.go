@@ -89,6 +89,9 @@ type LoginHandler struct {
 
 	// If this returns true, then this request will look for an Authorization header instead of cookies
 	AcceptAPIHeader func(*http.Request) bool
+
+	// If set, will log debug info
+	Logger *log.Logger
 }
 
 // Validates the given access token, and return the email address reported within.
@@ -213,6 +216,9 @@ func (lh *LoginHandler) Wrap(h http.Handler) http.Handler {
 						"redirect_uri":  {lh.BaseURL + "/oauth2callback"},
 					})
 					if err != nil {
+						if lh.Logger != nil {
+							lh.Logger.Println("error in oauth2callback:", err)
+						}
 						w.WriteHeader(http.StatusForbidden)
 						if len(lh.DeniedContent) != 0 {
 							w.Write(lh.DeniedContent)
@@ -231,13 +237,17 @@ func (lh *LoginHandler) Wrap(h http.Handler) http.Handler {
 
 					err = liuRaw.Save(r, w)
 					if err != nil {
-						log.Println(err)
+						if lh.Logger != nil {
+							lh.Logger.Println("saving session:", err)
+						}
 						w.WriteHeader(http.StatusInternalServerError)
 						return
 					}
 					err = osdRaw.Save(r, w)
 					if err != nil {
-						log.Println(err)
+						if lh.Logger != nil {
+							lh.Logger.Println("saving session:", err)
+						}
 						w.WriteHeader(http.StatusInternalServerError)
 						return
 					}
@@ -264,7 +274,9 @@ func (lh *LoginHandler) Wrap(h http.Handler) http.Handler {
 					})
 					if err != nil {
 						// User might have disconnected us, so don't hard fail
-						log.Println("Error refreshing token", err)
+						if lh.Logger != nil {
+							lh.Logger.Println("error refreshing token:", err)
+						}
 						osd.RefreshToken = "" // zero us out so we don't try again with this token
 					} else {
 						// All is happy
@@ -278,13 +290,17 @@ func (lh *LoginHandler) Wrap(h http.Handler) http.Handler {
 
 						err = liuRaw.Save(r, w)
 						if err != nil {
-							log.Println(err)
+							if lh.Logger != nil {
+								lh.Logger.Println("saving session:", err)
+							}
 							w.WriteHeader(http.StatusInternalServerError)
 							return
 						}
 						err = osdRaw.Save(r, w)
 						if err != nil {
-							log.Println(err)
+							if lh.Logger != nil {
+								lh.Logger.Println("saving session:", err)
+							}
 							w.WriteHeader(http.StatusInternalServerError)
 							return
 						}
@@ -308,7 +324,9 @@ func (lh *LoginHandler) Wrap(h http.Handler) http.Handler {
 			osd.State = base64.RawURLEncoding.EncodeToString(securecookie.GenerateRandomKey(32))
 			err := osdRaw.Save(r, w)
 			if err != nil {
-				log.Println(err)
+				if lh.Logger != nil {
+					lh.Logger.Println("saving session:", err)
+				}
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
