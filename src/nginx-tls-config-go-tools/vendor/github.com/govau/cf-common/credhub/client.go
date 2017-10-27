@@ -123,6 +123,8 @@ func (ch *Client) PutRequest(path string, val, rv interface{}) error {
 		return err
 	}
 
+	req.Header.Set("Content-Type", "application/json")
+
 	return ch.rawMakeRequest(req, rv)
 }
 
