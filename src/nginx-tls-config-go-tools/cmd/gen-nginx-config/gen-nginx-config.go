@@ -28,19 +28,23 @@ import (
 type config struct {
 	NginxJob string `yaml:"nginx_job"` // name of nginx jobs
 	Template struct {
-		ResponseHost      string `yaml:"responder"`           // will be resolved and added
-		Global            string `yaml:"global"`              // added to global
-		Events            string `yaml:"events"`              // added to events element
-		HTTP              string `yaml:"http"`                // added to http element
-		ACME              string `yaml:"acme"`                // added to http element
-		Server            string `yaml:"server"`              // added within each generated element
-		NoTLSYet          string `yaml:"pre_server"`          // adeded if no other valid server conf exists
-		AdminExtHost      string `yaml:"external_admin_host"` // external hostname for admin server
-		AdminServerConfig string `yaml:"admin_server"`        // config for the admin server
+		ResponseHost      string `yaml:"responder"`    // will be resolved and added
+		Global            string `yaml:"global"`       // added to global
+		Events            string `yaml:"events"`       // added to events element
+		HTTP              string `yaml:"http"`         // added to http element
+		ACME              string `yaml:"acme"`         // added to http element
+		Server            string `yaml:"server"`       // added within each generated element
+		NoTLSYet          string `yaml:"pre_server"`   // adeded if no other valid server conf exists
+		AdminServerConfig string `yaml:"admin_server"` // config for the admin server
 	} `yaml:"template"`
 	CredHub   credhub.Client `yaml:"credhub"`
 	Period    int            `yaml:"period"` // seconds between refresh attempts
 	configDir string
+}
+
+type sharedConfig struct {
+	OurCert   string   `json:"admin"`
+	CertPaths []string `json:"certs"`
 }
 
 type oauthToken struct {
@@ -101,7 +105,7 @@ var (
 	errNoDNSFound = errors.New("no dns names found in cert")
 )
 
-func (c *config) MakeConfForCert(cert *credhubCert) (bool, string, error) {
+func (c *config) MakeConfForCert(cert *credhubCert, perServerConf string) (bool, string, error) {
 	block, _ := pem.Decode([]byte(cert.Certificate))
 	if block == nil {
 		return false, "", errors.New("no cert found in pem")
@@ -145,43 +149,55 @@ func (c *config) MakeConfForCert(cert *credhubCert) (bool, string, error) {
 		ssl_certificate %s/%s.crt;
 		ssl_certificate_key %s/%s.key;
 		%s
-	}`, strings.Join(pc.DNSNames, " "), c.configDir, nameOfFile, c.configDir, nameOfFile, c.Template.Server), nil
+	}`, strings.Join(pc.DNSNames, " "), c.configDir, nameOfFile, c.configDir, nameOfFile, perServerConf), nil
 
 }
 
-func (c *config) GetServerConf() (bool, []string, error) {
-	// TODO - return an error if the certs returned have any overlap
-	var resp struct {
-		Credentials []struct {
-			Name string `json:"name"`
-		} `json:"credentials"`
+func (c *config) GetServerConf(admin string) (bool, []string, error) {
+	var conf struct {
+		Data []struct {
+			Value sharedConfig `json:"value"`
+		} `json:"data"`
 	}
-	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{"path": {"/certs"}}, &resp)
+
+	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
+		"name":    {"/config"},
+		"current": {"true"},
+	}, &conf)
 	if err != nil {
 		return false, nil, err
 	}
+
+	if len(conf.Data) != 1 {
+		return false, nil, errors.New("no config found")
+	}
+
 	var rv []string
 	retDirty := false
-	for _, cred := range resp.Credentials {
+	for _, cred := range conf.Data[0].Value.CertPaths {
 		var cr struct {
 			Data []struct {
 				Value credhubCert `json:"value"`
 			} `json:"data"`
 		}
 		err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
-			"name":    {cred.Name},
+			"name":    {cred},
 			"current": {"true"},
 		}, &cr)
 		if err != nil {
 			return false, nil, err
 		}
 		for _, v := range cr.Data {
-			dirty, nginxConf, err := c.MakeConfForCert(&v.Value)
+			specialConfig := c.Template.Server
+			if cred == conf.Data[0].Value.OurCert {
+				specialConfig = c.Template.AdminServerConfig
+			}
+			dirty, nginxConf, err := c.MakeConfForCert(&v.Value, specialConfig)
 			switch err {
 			case nil:
 				rv = append(rv, nginxConf)
 			case errNoDNSFound:
-				log.Println("No DNS found in cert, skipping: ", cred.Name)
+				log.Println("No DNS found in cert, skipping: ", cred)
 			default:
 				return false, nil, err
 			}
@@ -225,21 +241,6 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 	retDirty := false
 	sslInfoValid := false
 
-	dirty, perServer, err := c.GetServerConf()
-	sslInfoValid = (err == nil)
-	if err != nil {
-		if failEmpty {
-			err = nil
-		}
-		if err != nil {
-			return false, err
-		}
-	}
-
-	if dirty {
-		retDirty = true
-	}
-
 	ips, err := net.LookupIP(c.Template.ResponseHost)
 	if err != nil {
 		if failEmpty {
@@ -256,7 +257,22 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 		}
 	} else {
 		acme = strings.Replace(c.Template.ACME, "IP_ADDR", ips[0].String(), 1)
-		admin = strings.Replace(strings.Replace(c.Template.AdminServerConfig, "IP_ADDR", ips[0].String(), 1), "EXTERNAL_ADMIN_HOST", c.Template.AdminExtHost, 1)
+		admin = strings.Replace(c.Template.AdminServerConfig, "IP_ADDR", ips[0].String(), 1)
+	}
+
+	dirty, perServer, err := c.GetServerConf(admin)
+	sslInfoValid = (err == nil)
+	if err != nil {
+		if failEmpty {
+			err = nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+
+	if dirty {
+		retDirty = true
 	}
 
 	// Listening for SSL is our health indicator to the load balancer,
@@ -264,16 +280,11 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 	// We need to listen if empty, else we won't get HTTP requests though
 	sslConf := ""
 	if sslInfoValid {
-		sslConf += "server {\n"
 		if len(perServer) == 0 {
-			sslConf += c.Template.NoTLSYet + "\n"
+			sslConf = "server {\n" + c.Template.NoTLSYet + "\n}\n"
 		} else {
-			sslConf += c.Template.Server + "\n"
-			// TODO, add certs
+			sslConf = strings.Join(perServer, "\n")
 		}
-		sslConf += admin + "\n"
-		sslConf += "}\n"
-		sslConf += strings.Join(perServer, "\n")
 	}
 
 	dirty, err = c.SaveSafe("nginx.conf", []byte(fmt.Sprintf(`%s

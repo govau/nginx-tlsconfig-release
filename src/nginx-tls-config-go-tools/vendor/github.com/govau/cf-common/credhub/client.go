@@ -26,6 +26,10 @@ type Client struct {
 	token         *oauthToken
 }
 
+var (
+	ErrCredNotFound = errors.New("not found in credhub")
+)
+
 func (c *Client) Init() error {
 	uaaCaCertPool := x509.NewCertPool()
 	credHubCaCertPool := x509.NewCertPool()
@@ -140,9 +144,12 @@ func (ch *Client) rawMakeRequest(req *http.Request, rv interface{}) error {
 		return err
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return json.Unmarshal(contents, rv)
+	case http.StatusNotFound:
+		return ErrCredNotFound
+	default:
 		return fmt.Errorf("not OK response from CredHub: %s", contents)
 	}
-
-	return json.Unmarshal(contents, rv)
 }
