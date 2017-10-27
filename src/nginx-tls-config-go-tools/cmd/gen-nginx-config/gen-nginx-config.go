@@ -28,13 +28,15 @@ import (
 type config struct {
 	NginxJob string `yaml:"nginx_job"` // name of nginx jobs
 	Template struct {
-		ResponseHost string `yaml:"responder"`  // will be resolved and added
-		Global       string `yaml:"global"`     // added to global
-		Events       string `yaml:"events"`     // added to events element
-		HTTP         string `yaml:"http"`       // added to http element
-		ACME         string `yaml:"acme"`       // added to http element
-		Server       string `yaml:"server"`     // added within each generated element
-		NoTLSYet     string `yaml:"pre_server"` // adeded if no other valid server conf exists
+		ResponseHost      string `yaml:"responder"`           // will be resolved and added
+		Global            string `yaml:"global"`              // added to global
+		Events            string `yaml:"events"`              // added to events element
+		HTTP              string `yaml:"http"`                // added to http element
+		ACME              string `yaml:"acme"`                // added to http element
+		Server            string `yaml:"server"`              // added within each generated element
+		NoTLSYet          string `yaml:"pre_server"`          // adeded if no other valid server conf exists
+		AdminExtHost      string `yaml:"external_admin_host"` // external hostname for admin server
+		AdminServerConfig string `yaml:"admin_server"`        // config for the admin server
 	} `yaml:"template"`
 	CredHub   credhub.Client `yaml:"credhub"`
 	Period    int            `yaml:"period"` // seconds between refresh attempts
@@ -67,7 +69,7 @@ func newConf(configPath string) (*config, error) {
 	}
 
 	if c.Period == 0 {
-		return nil, errors.New("You must specify a refresh period of at least 1 second.")
+		return nil, errors.New("you must specify a refresh period of at least 1 second.")
 	}
 
 	return &c, nil
@@ -247,13 +249,14 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 		}
 	}
 
-	acme := ""
+	acme, admin := "", ""
 	if len(ips) == 0 {
 		if !failEmpty {
 			return false, errors.New("cannot resolve responder")
 		}
 	} else {
 		acme = strings.Replace(c.Template.ACME, "IP_ADDR", ips[0].String(), 1)
+		admin = strings.Replace(strings.Replace(c.Template.AdminServerConfig, "IP_ADDR", ips[0].String(), 1), "EXTERNAL_ADMIN_HOST", c.Template.AdminExtHost, 1)
 	}
 
 	// Listening for SSL is our health indicator to the load balancer,
@@ -261,11 +264,16 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 	// We need to listen if empty, else we won't get HTTP requests though
 	sslConf := ""
 	if sslInfoValid {
+		sslConf += "server {\n"
 		if len(perServer) == 0 {
-			sslConf = c.Template.NoTLSYet
+			sslConf += c.Template.NoTLSYet + "\n"
 		} else {
-			sslConf = strings.Join(perServer, "\n")
+			sslConf += c.Template.Server + "\n"
+			// TODO, add certs
 		}
+		sslConf += admin + "\n"
+		sslConf += "}\n"
+		sslConf += strings.Join(perServer, "\n")
 	}
 
 	dirty, err = c.SaveSafe("nginx.conf", []byte(fmt.Sprintf(`%s
@@ -281,6 +289,7 @@ func (c *config) UpdateConfig(failEmpty bool) (bool, error) {
 				# Then other HTTP
 				%s
 			}
+			# Per server SSL
 			%s
 		}`, c.Template.Global, c.Template.Events, acme, c.Template.HTTP, sslConf)))
 	if err != nil {

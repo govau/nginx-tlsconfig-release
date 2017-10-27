@@ -1,5 +1,7 @@
 package main
 
+//go:generate go-bindata -o static.go data/
+
 import (
 	"context"
 	"crypto/x509"
@@ -7,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html/template"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -17,7 +20,10 @@ import (
 
 	yaml "gopkg.in/yaml.v2"
 
+	"github.com/gorilla/csrf"
+	"github.com/gorilla/mux"
 	"github.com/govau/cf-common/credhub"
+	"github.com/govau/cf-common/uaa"
 )
 
 type config struct {
@@ -30,7 +36,22 @@ type config struct {
 		DaysBeforeToRenew int    `yaml:"days_before"`
 		EmailContact      string `yaml:"email"`
 	} `yaml:"acme"`
-	Port         int `yaml:"port"`
+	Port int `yaml:"port"`
+
+	Admin struct {
+		Port int `yaml:"port"`
+		UAA  struct {
+			ClientID     string   `yaml:"client_id"`
+			ClientSecret string   `yaml:"client_secret"`
+			InternalURL  string   `yaml:"internal_url"`
+			ExternalURL  string   `yaml:"external_url"`
+			CACerts      []string `yaml:"ca_certs"`
+		} `yaml:"uaa"`
+		InsecureCookies bool   `yaml:"insecure_cookies"`
+		ExternalURL     string `yaml:"external_url"`
+		CSRFKey         string `yaml:"csrf_key"`
+	} `yaml:"admin"`
+
 	Certificates []struct {
 		Hostnames     []string `yaml:"hostnames"`
 		ChallengeType string   `yaml:"challenge"`
@@ -229,6 +250,64 @@ func newConf(configPath string) (*config, error) {
 	return &c, nil
 }
 
+func (c *config) wellKnownHandler(w http.ResponseWriter, r *http.Request) {
+	// right back at you!
+	r.Write(w)
+}
+
+func (c *config) home(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
+// Fetch the logged in user, and create a cloudfoundry client object and pass that to the underlying real handler.
+// Finally, if a template name is specified, and no error returned, execute the template with the values returned
+func (c *config) wrapWithClient(tmpl string, f func(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		liu, ok := r.Context().Value(uaa.KeyLoggedInUser).(*uaa.LoggedInUser)
+		if !ok {
+			log.Println("bad type")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		toPass, err := f(mux.Vars(r), liu, w, r)
+		if err != nil {
+			log.Println(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		// If no template is desired, then stop here
+		if tmpl == "" {
+			return
+		}
+
+		data, err := Asset("data/" + tmpl)
+		if err != nil {
+			log.Println(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		toPass["user"] = liu
+		toPass[csrf.TemplateTag] = csrf.TemplateField(r)
+		template.Must(template.New("orgs").Parse(string(data))).Execute(w, toPass)
+	}
+}
+
+func (c *config) createAdminHandler() http.Handler {
+	r := mux.NewRouter()
+	r.HandleFunc("/", c.wrapWithClient("home", c.home))
+
+	// Wrap nearly everything with a CSRF
+	var opts []csrf.Option
+	if c.Admin.InsecureCookies {
+		opts = append(opts, csrf.Secure(false))
+	}
+
+	// TODO, check whether cast is really the right thing here...
+	return csrf.Protect([]byte(c.Admin.CSRFKey), opts...)(r)
+}
+
 func main() {
 	var configPath string
 	var daemon bool
@@ -242,16 +321,24 @@ func main() {
 		log.Fatal("error parsing config file", err)
 	}
 
-	err = conf.ensureAuthorized()
-	if err != nil {
-		log.Println(err.Error())
-	}
-
 	if daemon {
-		log.Println("Started daemon")
-		http.ListenAndServe(fmt.Sprintf(":%d", conf.Port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// right back at you!
-			r.Write(w)
-		}))
+		// Start admin server, we care less if this fails, so we'll get the process on the responder
+		go http.ListenAndServe(fmt.Sprintf(":%d", conf.Admin.Port), (&uaa.LoginHandler{
+			Cookies: uaa.MustCreateBasicCookieHandler(conf.Admin.InsecureCookies),
+			UAA: &uaa.Client{
+				URL:          conf.Admin.UAA.InternalURL,
+				CACerts:      conf.Admin.UAA.CACerts,
+				ClientID:     conf.Admin.UAA.ClientID,
+				ClientSecret: conf.Admin.UAA.ClientSecret,
+			},
+			Scopes: []string{
+				"openid",
+			},
+			BaseURL:        conf.Admin.ExternalURL,
+			ExternalUAAURL: conf.Admin.UAA.ExternalURL,
+		}).Wrap(conf.createAdminHandler()))
+
+		// Start actual responder
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", conf.Port), http.HandlerFunc(conf.wellKnownHandler)))
 	}
 }
