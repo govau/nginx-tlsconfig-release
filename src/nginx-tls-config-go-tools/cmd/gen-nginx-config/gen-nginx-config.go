@@ -164,12 +164,16 @@ func (c *config) GetServerConf(admin string) (bool, []string, error) {
 		"name":    {"/config"},
 		"current": {"true"},
 	}, &conf)
-	if err != nil {
+	switch err {
+	case nil:
+		if len(conf.Data) != 1 {
+			return false, nil, errors.New("no config found")
+		}
+	case credhub.ErrCredNotFound:
+		// server is responding correctly, but being bootstrapped
+		return false, nil, nil
+	default:
 		return false, nil, err
-	}
-
-	if len(conf.Data) != 1 {
-		return false, nil, errors.New("no config found")
 	}
 
 	var rv []string
