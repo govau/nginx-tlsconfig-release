@@ -1,5 +1,5 @@
 hash: f98b526cd0f3c47fae6fa520db6ec387ceec3edab0b67992b7889f496545b191
-updated: 2017-10-27T22:32:45.82989587+11:00
+updated: 2017-10-28T19:11:36.750863968+11:00
 imports:
 - name: github.com/dgrijalva/jwt-go
   version: dbeaa9332f19a944acb5736b4456cfcc02140e29
@@ -14,7 +14,7 @@ imports:
 - name: github.com/gorilla/sessions
   version: a3acf13e802c358d65f249324d14ed24aac11370
 - name: github.com/govau/cf-common
-  version: df19e495a7dfc7c93b3b5f3490aca1eeaf0d2dab
+  version: 2f435dded9321e9338fd6a33a436800ad986d0c2
   subpackages:
   - credhub
   - uaa

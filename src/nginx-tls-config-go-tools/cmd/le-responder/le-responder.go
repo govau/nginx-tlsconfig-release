@@ -55,9 +55,10 @@ type config struct {
 			ExternalURL  string   `yaml:"external_url"`
 			CACerts      []string `yaml:"ca_certs"`
 		} `yaml:"uaa"`
-		InsecureCookies bool   `yaml:"insecure_cookies"`
-		ExternalURL     string `yaml:"external_url"`
-		CSRFKey         string `yaml:"csrf_key"`
+		InsecureCookies bool     `yaml:"insecure_cookies"`
+		ExternalURL     string   `yaml:"external_url"`
+		CSRFKey         string   `yaml:"csrf_key"`
+		AllowedUsers    []string `yaml:"allowed_users"`
 	} `yaml:"admin"`
 
 	Certificates []struct {
@@ -628,6 +629,7 @@ func main() {
 			Scopes: []string{
 				"openid",
 			},
+			AllowedUsers:   conf.Admin.AllowedUsers,
 			BaseURL:        conf.Admin.ExternalURL,
 			ExternalUAAURL: conf.Admin.UAA.ExternalURL,
 			Logger:         log.New(os.Stderr, "", log.LstdFlags),

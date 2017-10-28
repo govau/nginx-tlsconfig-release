@@ -92,6 +92,9 @@ type LoginHandler struct {
 
 	// If set, will log debug info
 	Logger *log.Logger
+
+	// AllowedUsers if not empty, then user is 403ed unless they are in this list
+	AllowedUsers []string
 }
 
 // Validates the given access token, and return the email address reported within.
@@ -314,6 +317,27 @@ func (lh *LoginHandler) Wrap(h http.Handler) http.Handler {
 
 			// Finally, we are good to go.
 			if liu.EmailAddress != "" {
+				// One last authorization check
+				if len(lh.AllowedUsers) != 0 {
+					found := false
+					for _, au := range lh.AllowedUsers {
+						if au == liu.EmailAddress {
+							found = true
+							break
+						}
+					}
+					if !found {
+						if lh.Logger != nil {
+							lh.Logger.Println("unauthorized login attempt by:", liu.EmailAddress)
+						}
+						w.WriteHeader(http.StatusForbidden)
+						if len(lh.DeniedContent) != 0 {
+							w.Write(lh.DeniedContent)
+						}
+						return
+					}
+				}
+
 				// Add our logged in user to the request object passed to the child
 				h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), KeyLoggedInUser, liu)))
 				return
