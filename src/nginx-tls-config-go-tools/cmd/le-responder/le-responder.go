@@ -97,7 +97,7 @@ func (cic certsInCredhub) getLongestUntilExpiry(hn string) *x509.Certificate {
 	return rv
 }
 
-func (c *config) ensureAuthorized() error {
+/*func (c *config) ensureAuthorized() error {
 	hostToCerts, err := c.getCertsByHostname()
 	if err != nil {
 		return err
@@ -174,7 +174,7 @@ func (c *config) getCertsByHostname() (certsInCredhub, error) {
 	}
 
 	return hostToCerts, nil
-}
+}*/
 
 type credhubCert struct {
 	CA          string `json:"ca"`
