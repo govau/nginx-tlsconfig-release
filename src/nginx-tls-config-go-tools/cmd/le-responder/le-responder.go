@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 
 	"github.com/gorilla/csrf"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 	"github.com/govau/cf-common/credhub"
 	"github.com/govau/cf-common/uaa"
 )
@@ -63,6 +65,7 @@ type config struct {
 
 	adminHostname string
 	certFactory   certSource
+	cookies       *sessions.CookieStore
 }
 
 type certSource interface {
@@ -148,7 +151,6 @@ func (acs *acmeCertSource) wipeChallenges() {
 
 func (acs *acmeCertSource) AutoFetchCert(ctx context.Context, pkey *rsa.PrivateKey, hostname string) ([][]byte, error) {
 	if !acs.acmeKnownRegistered {
-
 		log.Println("Always try to register on startup, who cares if we already have...")
 		_, err := acs.acmeClient.Register(ctx, &acme.Account{
 			Contact: []string{"mailto:" + acs.EmailContact},
@@ -249,49 +251,17 @@ func (cic certsInCredhub) getLongestUntilExpiry(hn string) *x509.Certificate {
 
 type credhubCert struct {
 	Source      string `json:"source"` // either ACME URL or "self-signed"
+	Type        string `json:"type"`   // "admin" or ?
 	CA          string `json:"ca"`
 	Certificate string `json:"certificate"`
 	PrivateKey  string `json:"private_key"`
+
+	path string // set for convenience of callers, but not stored
 }
 
 type perm struct {
 	Actor      string   `json:"actor"`
 	Operations []string `json:"operations"`
-}
-
-func (c *config) saveAccount(acc *acme.Account) error {
-	var rv map[string]interface{}
-	return c.CredHub.PutRequest("/api/v1/data", struct {
-		Name      string        `json:"name"`
-		Type      string        `json:"type"`
-		Overwrite bool          `json:"overwrite"`
-		Value     *acme.Account `json:"value"`
-		Perms     []perm        `json:"additional_permissions"`
-	}{
-		Name:      "/acme/account",
-		Type:      "json",
-		Overwrite: true,
-		Value:     acc,
-	}, &rv)
-}
-
-func (c *config) fetchAccount() (*acme.Account, error) {
-	var cr struct {
-		Data []struct {
-			Value acme.Account `json:"value"`
-		} `json:"data"`
-	}
-	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
-		"name":    {"/acme/account"},
-		"current": {"true"},
-	}, &cr)
-	if err != nil {
-		return nil, err
-	}
-	if len(cr.Data) != 1 {
-		return nil, errors.New("wrong number of accounts returned")
-	}
-	return &cr.Data[0].Value, nil
 }
 
 func newConf(configPath string) (*config, error) {
@@ -340,14 +310,13 @@ func newConf(configPath string) (*config, error) {
 		return nil, errors.New("period must be specified and non-zero. should be in seconds")
 	}
 
+	c.cookies = uaa.MustCreateBasicCookieHandler(c.Admin.InsecureCookies)
+
 	return &c, nil
 }
 
 func (c *config) getMeACert(hostname string) (string, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-
-	path := "/certs/" + hex.EncodeToString([]byte(hostname))
+	path := pathFromHost(hostname)
 
 	var cr struct {
 		Data []struct {
@@ -400,16 +369,40 @@ func (c *config) getMeACert(hostname string) (string, bool, error) {
 		return path, false, nil
 	}
 
-	pkey, err := rsa.GenerateKey(rand.Reader, 2048)
+	err = c.renewCertNow(hostname)
 	if err != nil {
 		return "", false, err
+	}
+
+	return path, true, nil
+}
+
+func pathFromHost(hostname string) string {
+	return "/certs/" + hex.EncodeToString([]byte(hostname))
+}
+
+func hostFromPath(path string) string {
+	b, err := hex.DecodeString(path[len("/certs/"):])
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func (c *config) renewCertNow(hostname string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	pkey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return err
 	}
 
 	log.Println("need a cert for:", hostname)
 
 	der, err := c.certFactory.AutoFetchCert(ctx, pkey, hostname)
 	if err != nil {
-		return "", false, err
+		return err
 	}
 
 	log.Println("got it, saving to credhub")
@@ -422,39 +415,29 @@ func (c *config) getMeACert(hostname string) (string, bool, error) {
 		}))
 	}
 
-	var rv map[string]interface{}
-	err = c.CredHub.PutRequest("/api/v1/data", struct {
-		Name      string       `json:"name"`
-		Type      string       `json:"type"`
-		Overwrite bool         `json:"overwrite"`
-		Value     *credhubCert `json:"value"`
-		Perms     []perm       `json:"additional_permissions"`
-	}{
-		Name:      path,
-		Type:      "json",
-		Overwrite: true,
-		Value: &credhubCert{
-			Source: c.certFactory.Source(),
-			CA:     roots,
-			Certificate: string(pem.EncodeToMemory(&pem.Block{
-				Bytes: der[0],
-				Type:  "CERTIFICATE",
-			})),
-			PrivateKey: string(pem.EncodeToMemory(&pem.Block{
-				Bytes: x509.MarshalPKCS1PrivateKey(pkey),
-				Type:  "RSA PRIVATE KEY",
-			})),
-		},
-		Perms: []perm{{
-			Actor:      c.NginxClient,
-			Operations: []string{"read"},
-		}},
-	}, &rv)
-	if err != nil {
-		return "", false, err
+	certType := "cf"
+	if hostname == c.adminHostname {
+		certType = "admin"
 	}
 
-	return path, true, nil
+	err = c.saveCred(pathFromHost(hostname), &credhubCert{
+		Source: c.certFactory.Source(),
+		CA:     roots,
+		Type:   certType,
+		Certificate: string(pem.EncodeToMemory(&pem.Block{
+			Bytes: der[0],
+			Type:  "CERTIFICATE",
+		})),
+		PrivateKey: string(pem.EncodeToMemory(&pem.Block{
+			Bytes: x509.MarshalPKCS1PrivateKey(pkey),
+			Type:  "RSA PRIVATE KEY",
+		})),
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *config) periodicScan() error {
@@ -545,8 +528,232 @@ func (c *config) wellKnownHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 }
 
-func (c *config) home(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error) {
+type uiCert struct {
+	Name          string
+	Path          string
+	ShowDelete    bool
+	ShowRenew     bool
+	DaysRemaining int
+	CredHubCert   *credhubCert
+}
+
+func (c *config) add(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error) {
 	return map[string]interface{}{}, nil
+}
+
+func (c *config) flashMessage(w http.ResponseWriter, r *http.Request, m string) {
+	session, _ := c.cookies.Get(r, "f")
+	session.AddFlash(m)
+	session.Save(r, w)
+}
+
+func (c *config) update(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error) {
+	switch r.FormValue("action") {
+	case "create":
+		hostname := r.FormValue("host")
+		if len(hostname) == 0 {
+			c.flashMessage(w, r, "empty hostname")
+			break
+		}
+		path := pathFromHost(hostname)
+
+		// Look to see if it exists
+		_, err := c.fetchCred(path)
+		if err == nil {
+			c.flashMessage(w, r, "already managed")
+			break
+		}
+
+		err = c.saveCred(path, &credhubCert{
+			Source: c.certFactory.Source(),
+		})
+		if err != nil {
+			c.flashMessage(w, r, err.Error())
+			break
+		}
+
+	case "delete":
+		hostname := hostFromPath(r.FormValue("path"))
+		if hostname == "" {
+			c.flashMessage(w, r, "cannot find cert")
+			break
+		}
+
+		if hostname == c.adminHostname {
+			c.flashMessage(w, r, "not allowed to delete cert for this server")
+			break
+		}
+
+		err := c.deleteCred(pathFromHost(hostname))
+		if err != nil {
+			c.flashMessage(w, r, err.Error())
+			break
+		}
+
+		c.flashMessage(w, r, "cert successfully renewed")
+		break
+
+		c.flashMessage(w, r, "not implemented yet")
+		break
+
+	case "auto":
+		hostname := hostFromPath(r.FormValue("path"))
+		if hostname == "" {
+			c.flashMessage(w, r, "cannot find cert")
+			break
+		}
+
+		err := c.renewCertNow(hostname)
+		if err != nil {
+			c.flashMessage(w, r, err.Error())
+			break
+		}
+
+		c.flashMessage(w, r, "cert successfully renewed")
+		break
+
+	default:
+		c.flashMessage(w, r, "unknown action")
+		break
+	}
+
+	http.Redirect(w, r, "/", http.StatusFound)
+	return nil, nil
+}
+
+func (c *config) deleteCred(path string) error {
+	return c.CredHub.DeleteRequest("/api/v1/data", url.Values{
+		"name": {path},
+	})
+}
+
+func (c *config) saveCred(path string, chc *credhubCert) error {
+	var ignoreMe map[string]interface{}
+	return c.CredHub.PutRequest("/api/v1/data", struct {
+		Name      string       `json:"name"`
+		Type      string       `json:"type"`
+		Overwrite bool         `json:"overwrite"`
+		Value     *credhubCert `json:"value"`
+		Perms     []perm       `json:"additional_permissions"`
+	}{
+		Name:      path,
+		Type:      "json",
+		Overwrite: true,
+		Value:     chc,
+		Perms: []perm{{
+			Actor:      c.NginxClient,
+			Operations: []string{"read"},
+		}},
+	}, &ignoreMe)
+}
+
+func (c *config) fetchAllCerts() ([]*credhubCert, error) {
+	// Fetch list of certs
+	var cr struct {
+		Credentials []struct {
+			Name string `json:"name"`
+		} `json:"credentials"`
+	}
+	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
+		"path": {"/certs"},
+	}, &cr)
+	if err != nil {
+		return nil, err
+	}
+
+	rv := make([]*credhubCert, len(cr.Credentials))
+	for i, curCred := range cr.Credentials {
+		rv[i], err = c.fetchCred(curCred.Name)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return rv, nil
+}
+
+func (c *config) fetchCred(path string) (*credhubCert, error) {
+	var cr2 struct {
+		Data []struct {
+			//Name  string      `json:"name"`
+			Value credhubCert `json:"value"`
+		} `json:"data"`
+	}
+	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
+		"name":    {path},
+		"current": {"true"},
+	}, &cr2)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(cr2.Data) != 1 {
+		return nil, errors.New("bad data from credhub")
+	}
+
+	rv := cr2.Data[0].Value
+	rv.path = path
+
+	return &rv, nil
+}
+
+func (c *config) home(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error) {
+	// Fetch list of certs
+	certs, err := c.fetchAllCerts()
+	if err != nil {
+		return nil, err
+	}
+
+	certsForUI := make([]uiCert, len(certs))
+	for i, curCred := range certs {
+		nameToShow := hostFromPath(curCred.path)
+		if nameToShow == "" {
+			nameToShow = "cannot decode: " + string(curCred.path)
+		}
+
+		daysRemaining := -1
+
+		if curCred.Certificate != "" {
+			block, _ := pem.Decode([]byte(curCred.Certificate))
+			if block == nil {
+				return nil, errors.New("no cert found in pem")
+			}
+			if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+				return nil, errors.New("invalid cert found in pem")
+			}
+
+			pc, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, err
+			}
+
+			daysRemaining = int(pc.NotAfter.Sub(time.Now()).Hours() / 24)
+		}
+
+		certsForUI[i] = uiCert{
+			Name:          nameToShow,
+			Path:          curCred.path,
+			DaysRemaining: daysRemaining,
+			ShowDelete:    nameToShow != c.adminHostname,
+			ShowRenew:     true,
+			CredHubCert:   curCred,
+		}
+	}
+
+	sort.Slice(certsForUI, func(i, j int) bool {
+		return certsForUI[i].Name < certsForUI[j].Name
+	})
+
+	session, _ := c.cookies.Get(r, "f")
+	flashes := session.Flashes()
+	if len(flashes) != 0 {
+		session.Save(r, w)
+	}
+
+	return map[string]interface{}{
+		"certs":    certsForUI,
+		"messages": flashes,
+	}, nil
 }
 
 // Fetch the logged in user, and create a cloudfoundry client object and pass that to the underlying real handler.
@@ -587,6 +794,8 @@ func (c *config) wrapWithClient(tmpl string, f func(vars map[string]string, liu 
 func (c *config) createAdminHandler() http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/", c.wrapWithClient("index.html", c.home))
+	r.HandleFunc("/add", c.wrapWithClient("add.html", c.add))
+	r.HandleFunc("/update", c.wrapWithClient("", c.update)) // will redirect back to home
 
 	// Wrap nearly everything with a CSRF
 	var opts []csrf.Option
@@ -614,7 +823,7 @@ func main() {
 	if daemon {
 		// Start admin server, we care less if this fails, so we'll get the process on the responder
 		go http.ListenAndServe(fmt.Sprintf(":%d", conf.Admin.Port), (&uaa.LoginHandler{
-			Cookies: uaa.MustCreateBasicCookieHandler(conf.Admin.InsecureCookies),
+			Cookies: conf.cookies,
 			UAA: &uaa.Client{
 				URL:          conf.Admin.UAA.InternalURL,
 				CACerts:      conf.Admin.UAA.CACerts,

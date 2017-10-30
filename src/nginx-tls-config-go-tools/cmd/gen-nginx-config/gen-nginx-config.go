@@ -96,6 +96,7 @@ func (c *config) ReloadNginx() error {
 }
 
 type credhubCert struct {
+	Type        string `json:"type"` // "admin" or ?
 	CA          string `json:"ca"`
 	Certificate string `json:"certificate"`
 	PrivateKey  string `json:"private_key"`
@@ -153,61 +154,83 @@ func (c *config) MakeConfForCert(cert *credhubCert, perServerConf string) (bool,
 
 }
 
-func (c *config) GetServerConf(admin string) (bool, []string, error) {
-	var conf struct {
-		Data []struct {
-			Value sharedConfig `json:"value"`
-		} `json:"data"`
+// TODO no copy pasta!
+func (c *config) fetchAllCerts() ([]*credhubCert, error) {
+	// Fetch list of certs
+	var cr struct {
+		Credentials []struct {
+			Name string `json:"name"`
+		} `json:"credentials"`
+	}
+	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
+		"path": {"/certs"},
+	}, &cr)
+	if err != nil {
+		return nil, err
 	}
 
-	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
-		"name":    {"/config"},
-		"current": {"true"},
-	}, &conf)
-	switch err {
-	case nil:
-		if len(conf.Data) != 1 {
-			return false, nil, errors.New("no config found")
+	rv := make([]*credhubCert, len(cr.Credentials))
+	for i, curCred := range cr.Credentials {
+		rv[i], err = c.fetchCred(curCred.Name)
+		if err != nil {
+			return nil, err
 		}
-	case credhub.ErrCredNotFound:
-		// server is responding correctly, but being bootstrapped
-		return false, nil, nil
-	default:
+	}
+
+	return rv, nil
+}
+
+func (c *config) fetchCred(path string) (*credhubCert, error) {
+	var cr2 struct {
+		Data []struct {
+			//Name  string      `json:"name"`
+			Value credhubCert `json:"value"`
+		} `json:"data"`
+	}
+	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
+		"name":    {path},
+		"current": {"true"},
+	}, &cr2)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(cr2.Data) != 1 {
+		return nil, errors.New("bad data from credhub")
+	}
+
+	rv := cr2.Data[0].Value
+
+	return &rv, nil
+}
+
+func (c *config) GetServerConf(admin string) (bool, []string, error) {
+	certs, err := c.fetchAllCerts()
+	if err != nil {
 		return false, nil, err
+	}
+	if len(certs) == 0 { // we're being bootstrapped, chill
+		return false, nil, nil
 	}
 
 	var rv []string
 	retDirty := false
-	for _, cred := range conf.Data[0].Value.CertPaths {
-		var cr struct {
-			Data []struct {
-				Value credhubCert `json:"value"`
-			} `json:"data"`
+	for _, cred := range certs {
+		specialConfig := c.Template.Server
+		if cred.Type == "admin" {
+			specialConfig += "\n" + admin + "\n"
 		}
-		err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
-			"name":    {cred},
-			"current": {"true"},
-		}, &cr)
-		if err != nil {
+		dirty, nginxConf, err := c.MakeConfForCert(cred, specialConfig)
+		switch err {
+		case nil:
+			rv = append(rv, nginxConf)
+		case errNoDNSFound:
+			log.Println("No DNS found in cert, skipping: ", cred)
+		default:
 			return false, nil, err
 		}
-		for _, v := range cr.Data {
-			specialConfig := c.Template.Server
-			if cred == conf.Data[0].Value.OurCert {
-				specialConfig += "\n" + admin + "\n"
-			}
-			dirty, nginxConf, err := c.MakeConfForCert(&v.Value, specialConfig)
-			switch err {
-			case nil:
-				rv = append(rv, nginxConf)
-			case errNoDNSFound:
-				log.Println("No DNS found in cert, skipping: ", cred)
-			default:
-				return false, nil, err
-			}
-			if dirty {
-				retDirty = true
-			}
+		if dirty {
+			retDirty = true
 		}
 	}
 
