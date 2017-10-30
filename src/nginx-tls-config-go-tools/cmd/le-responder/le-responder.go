@@ -441,66 +441,10 @@ func (c *config) renewCertNow(hostname string) error {
 }
 
 func (c *config) periodicScan() error {
-	// First, read the data
-	var conf struct {
-		Data []struct {
-			Value sharedConfig `json:"value"`
-		} `json:"data"`
-	}
-
-	dirty := false
-	var cc *sharedConfig
-
-	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
-		"name":    {"/config"},
-		"current": {"true"},
-	}, &conf)
-	switch err {
-	case nil:
-		if len(conf.Data) != 1 {
-			return errors.New("invalid found")
-		}
-		cc = &conf.Data[0].Value
-	case credhub.ErrCredNotFound:
-		cc = &sharedConfig{}
-		dirty = true
-	default:
-		return err
-	}
-
 	// Next, see if our root cert exists
-	rootPath, written, err := c.getMeACert(c.adminHostname)
+	_, _, err := c.getMeACert(c.adminHostname)
 	if err != nil {
 		return err
-	}
-	if written {
-		cc.OurCert = rootPath
-		cc.CertPaths = []string{rootPath}
-		dirty = true
-	}
-
-	if dirty {
-		// Write out our config record
-		var rv map[string]interface{}
-		err = c.CredHub.PutRequest("/api/v1/data", struct {
-			Name      string        `json:"name"`
-			Type      string        `json:"type"`
-			Overwrite bool          `json:"overwrite"`
-			Value     *sharedConfig `json:"value"`
-			Perms     []perm        `json:"additional_permissions"`
-		}{
-			Name:      "/config",
-			Type:      "json",
-			Overwrite: true,
-			Value:     cc,
-			Perms: []perm{{
-				Actor:      c.NginxClient,
-				Operations: []string{"read"},
-			}},
-		}, &rv)
-		if err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -591,9 +535,6 @@ func (c *config) update(vars map[string]string, liu *uaa.LoggedInUser, w http.Re
 		}
 
 		c.flashMessage(w, r, "cert successfully renewed")
-		break
-
-		c.flashMessage(w, r, "not implemented yet")
 		break
 
 	case "auto":
