@@ -16,6 +16,7 @@ import (
 	"html/template"
 	"io/ioutil"
 	"log"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -33,17 +34,11 @@ import (
 )
 
 type config struct {
-	CredHub credhub.Client `yaml:"credhub"`
-	ACME    struct {
-		Disable bool `yaml:"disable"`
-		Key     struct {
-			PrivateKey string `yaml:"private_key"`
-		} `yaml:"key"`
-		URL               string `yaml:"url"`
-		DaysBeforeToRenew int    `yaml:"days_before"`
-		EmailContact      string `yaml:"email"`
-		Period            int    `yaml:"period"`
-	} `yaml:"acme"`
+	CredHub    credhub.Client `yaml:"credhub"`
+	CertSource string         `yaml:"cert_source"` // "acme" or "self-signed"
+
+	ACME *acmeCertSource `yaml:"acme"`
+
 	Port int `yaml:"port"`
 
 	Admin struct {
@@ -61,19 +56,174 @@ type config struct {
 		AllowedUsers    []string `yaml:"allowed_users"`
 	} `yaml:"admin"`
 
-	Certificates []struct {
-		Hostnames     []string `yaml:"hostnames"`
-		ChallengeType string   `yaml:"challenge"`
-	} `yaml:"certificates"`
+	DaysBeforeToRenew int `yaml:"days_before"`
 
 	NginxClient string `yaml:"nginx_credhub_actor"`
+	Period      int    `yaml:"period"` // seconds between scans
+
+	adminHostname string
+	certFactory   certSource
+}
+
+type certSource interface {
+	// AutoFetchCert will try to fetch a cert now for the hostname and given context (you should set this to timeout)
+	AutoFetchCert(ctx context.Context, pkey *rsa.PrivateKey, hostname string) ([][]byte, error)
+
+	// Source returns a name that we compare to check if the cert we have is from the right source
+	Source() string
+}
+
+type selfSignedSource struct{}
+
+func (sss *selfSignedSource) Source() string {
+	return "self-signed"
+}
+
+func (sss *selfSignedSource) AutoFetchCert(ctx context.Context, pkey *rsa.PrivateKey, hostname string) ([][]byte, error) {
+	tmpl := &x509.Certificate{
+		DNSNames:     []string{hostname},
+		NotBefore:    time.Now().Add(-5 * time.Minute),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: hostname,
+		},
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+	}
+	cert, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &pkey.PublicKey, pkey)
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{cert}, nil
+}
+
+type acmeCertSource struct {
+	Key struct {
+		PrivateKey string `yaml:"private_key"`
+	} `yaml:"key"`
+	URL          string `yaml:"url"`
+	EmailContact string `yaml:"email"`
 
 	acmeClient          *acme.Client
 	acmeKnownRegistered bool
-	adminHostname       string
 
 	challengeMutex    sync.RWMutex
 	challengeResponse map[string][]byte
+}
+
+func (acs *acmeCertSource) Init() error {
+	block, _ := pem.Decode([]byte(acs.Key.PrivateKey))
+	if block == nil {
+		return errors.New("no private key found in pem")
+	}
+	if block.Type != "RSA PRIVATE KEY" || len(block.Headers) != 0 {
+		return errors.New("invalid private key found in pem for acme")
+	}
+
+	acmeKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return err
+	}
+
+	acs.acmeClient = &acme.Client{
+		Key:          acmeKey,
+		DirectoryURL: acs.URL,
+	}
+
+	acs.challengeResponse = make(map[string][]byte)
+	return nil
+}
+
+func (acs *acmeCertSource) Source() string {
+	return "acme:" + acs.URL
+}
+
+func (acs *acmeCertSource) wipeChallenges() {
+	// Wipe the challenge / response map
+	acs.challengeMutex.Lock()
+	acs.challengeResponse = make(map[string][]byte)
+	acs.challengeMutex.Unlock()
+}
+
+func (acs *acmeCertSource) AutoFetchCert(ctx context.Context, pkey *rsa.PrivateKey, hostname string) ([][]byte, error) {
+	if !acs.acmeKnownRegistered {
+
+		log.Println("Always try to register on startup, who cares if we already have...")
+		_, err := acs.acmeClient.Register(ctx, &acme.Account{
+			Contact: []string{"mailto:" + acs.EmailContact},
+		}, acme.AcceptTOS)
+		if err != nil {
+			log.Println("Error registering with LE - we've likely already done so, so ignoring:", err)
+		}
+	}
+
+	log.Println("try to authorize...")
+	authz, err := acs.acmeClient.Authorize(ctx, hostname)
+	if err != nil {
+		return nil, err
+	}
+
+	if authz.Status == acme.StatusValid {
+		log.Println("already valid!")
+	} else {
+		var chal *acme.Challenge
+		for _, c := range authz.Challenges {
+			if c.Type == "http-01" {
+				chal = c
+				break
+			}
+		}
+		if chal == nil {
+			return nil, errors.New("no supported challenge type found")
+		}
+
+		k := acs.acmeClient.HTTP01ChallengePath(chal.Token)
+		v, err := acs.acmeClient.HTTP01ChallengeResponse(chal.Token)
+		if err != nil {
+			return nil, err
+		}
+
+		defer acs.wipeChallenges()
+		acs.challengeMutex.Lock()
+		acs.challengeResponse[k] = []byte(v)
+		acs.challengeMutex.Unlock()
+
+		log.Println("accepting http challenge...")
+
+		_, err = acs.acmeClient.Accept(ctx, chal)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Println("waiting authorization...")
+		_, err = acs.acmeClient.WaitAuthorization(ctx, authz.URI)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{
+			CommonName: hostname,
+		},
+	}, pkey)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Println("creating cert...")
+	der, _, err := acs.acmeClient.CreateCert(ctx, csr, 0, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// Serialize it
+	if len(der) == 0 {
+		return nil, errors.New("no certs returned")
+	}
+
+	return der, nil
 }
 
 type sharedConfig struct {
@@ -97,86 +247,8 @@ func (cic certsInCredhub) getLongestUntilExpiry(hn string) *x509.Certificate {
 	return rv
 }
 
-/*func (c *config) ensureAuthorized() error {
-	hostToCerts, err := c.getCertsByHostname()
-	if err != nil {
-		return err
-	}
-
-	targetTime := time.Now().Add(time.Hour * 24 * time.Duration(c.ACME.DaysBeforeToRenew))
-
-	// Now make sure that all our cert objects are happy
-	for _, wantedCert := range c.Certificates {
-		allGood := true
-		for _, hn := range wantedCert.Hostnames {
-			bestCert := hostToCerts.getLongestUntilExpiry(hn)
-			if bestCert == nil || bestCert.NotAfter.Before(targetTime) {
-				allGood = false
-			}
-		}
-
-		if !allGood {
-			for _, dns := range wantedCert.Hostnames {
-				authz, err := c.acmeClient.Authorize(context.Background(), dns)
-				if err != nil {
-					return err
-				}
-				log.Printf("Authz: %#v\n", authz)
-			}
-		}
-	}
-
-	return nil
-}
-
-func (c *config) getCertsByHostname() (certsInCredhub, error) {
-	hostToCerts := make(certsInCredhub)
-	var resp struct {
-		Credentials []struct {
-			Name string `json:"name"`
-		} `json:"credentials"`
-	}
-	err := c.CredHub.MakeRequest("/api/v1/data", url.Values{"path": {"/certs"}}, &resp)
-	if err != nil {
-		return nil, err
-	}
-	for _, cred := range resp.Credentials {
-		var cr struct {
-			Data []struct {
-				Value credhubCert `json:"value"`
-			} `json:"data"`
-		}
-		err := c.CredHub.MakeRequest("/api/v1/data", url.Values{
-			"name":    {cred.Name},
-			"current": {"true"},
-		}, &cr)
-		if err != nil {
-			return nil, err
-		}
-		for _, v := range cr.Data {
-			block, _ := pem.Decode([]byte(v.Value.Certificate))
-			if block == nil {
-				return nil, errors.New("no cert found in pem")
-			}
-			if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
-				return nil, errors.New("invalid cert found in pem")
-			}
-
-			pc, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return nil, err
-			}
-
-			for _, dns := range pc.DNSNames {
-				hostToCerts[dns] = append(hostToCerts[dns], pc)
-			}
-		}
-	}
-
-	return hostToCerts, nil
-}*/
-
 type credhubCert struct {
+	Source      string `json:"source"` // either ACME URL or "self-signed"
 	CA          string `json:"ca"`
 	Certificate string `json:"certificate"`
 	PrivateKey  string `json:"private_key"`
@@ -241,28 +313,6 @@ func newConf(configPath string) (*config, error) {
 		return nil, err
 	}
 
-	block, _ := pem.Decode([]byte(c.ACME.Key.PrivateKey))
-	if block == nil {
-		return nil, errors.New("no cert found in pem")
-	}
-	if block.Type != "RSA PRIVATE KEY" || len(block.Headers) != 0 {
-		return nil, errors.New("invalid private key found in pem for acme")
-	}
-
-	acmeKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-
-	c.acmeClient = &acme.Client{
-		Key:          acmeKey,
-		DirectoryURL: c.ACME.URL,
-	}
-
-	if c.ACME.Period == 0 {
-		return nil, errors.New("period must be specified, it should be in seconds")
-	}
-
 	u, err := url.Parse(c.Admin.ExternalURL)
 	if err != nil {
 		return nil, err
@@ -273,7 +323,22 @@ func newConf(configPath string) (*config, error) {
 		return nil, errors.New("admin external url must be specified")
 	}
 
-	c.challengeResponse = make(map[string][]byte)
+	switch c.CertSource {
+	case "acme":
+		err = c.ACME.Init()
+		if err != nil {
+			return nil, err
+		}
+		c.certFactory = c.ACME
+	case "self-signed":
+		c.certFactory = &selfSignedSource{}
+	default:
+		return nil, fmt.Errorf("unknown cert source: %s", c.CertSource)
+	}
+
+	if c.Period == 0 {
+		return nil, errors.New("period must be specified and non-zero. should be in seconds")
+	}
 
 	return &c, nil
 }
@@ -282,7 +347,7 @@ func (c *config) getMeACert(hostname string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	path := "/certs/" + hex.EncodeToString([]byte(c.adminHostname))
+	path := "/certs/" + hex.EncodeToString([]byte(hostname))
 
 	var cr struct {
 		Data []struct {
@@ -322,7 +387,11 @@ func (c *config) getMeACert(hostname string) (string, bool, error) {
 			return "", false, err
 		}
 
-		if pc.NotAfter.Before(time.Now().Add(24 * time.Hour * time.Duration(c.ACME.DaysBeforeToRenew))) {
+		if pc.NotAfter.Before(time.Now().Add(24 * time.Hour * time.Duration(c.DaysBeforeToRenew))) {
+			needNew = true
+		}
+
+		if chc.Source != c.certFactory.Source() {
 			needNew = true
 		}
 	}
@@ -331,86 +400,16 @@ func (c *config) getMeACert(hostname string) (string, bool, error) {
 		return path, false, nil
 	}
 
-	log.Println("need a cert for:", hostname)
-
-	if !c.acmeKnownRegistered {
-		c.acmeKnownRegistered = true
-		log.Println("Always try to register on startup, who cares if we already have...")
-		_, err = c.acmeClient.Register(ctx, &acme.Account{
-			Contact: []string{"mailto:" + c.ACME.EmailContact},
-		}, acme.AcceptTOS)
-		if err != nil {
-			log.Println("Error registering with LE - we've likely already done so, so ignoring:", err)
-		}
-	}
-
-	log.Println("try to authorize...")
-	authz, err := c.acmeClient.Authorize(ctx, hostname)
-	if err != nil {
-		return "", false, err
-	}
-
-	if authz.Status == acme.StatusValid {
-		log.Println("already valid!")
-	} else {
-		var chal *acme.Challenge
-		for _, c := range authz.Challenges {
-			if c.Type == "http-01" {
-				chal = c
-				break
-			}
-		}
-		if chal == nil {
-			return "", false, errors.New("no supported challenge type found")
-		}
-
-		k := c.acmeClient.HTTP01ChallengePath(chal.Token)
-		v, err := c.acmeClient.HTTP01ChallengeResponse(chal.Token)
-		if err != nil {
-			return "", false, err
-		}
-
-		c.challengeMutex.Lock()
-		c.challengeResponse[k] = []byte(v)
-		c.challengeMutex.Unlock()
-
-		log.Println("accepting http challenge...")
-
-		_, err = c.acmeClient.Accept(ctx, chal)
-		if err != nil {
-			return "", false, err
-		}
-
-		log.Println("waiting authorization...")
-		_, err = c.acmeClient.WaitAuthorization(ctx, authz.URI)
-		if err != nil {
-			return "", false, err
-		}
-	}
-
 	pkey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return "", false, err
 	}
 
-	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject: pkix.Name{
-			CommonName: hostname,
-		},
-	}, pkey)
+	log.Println("need a cert for:", hostname)
+
+	der, err := c.certFactory.AutoFetchCert(ctx, pkey, hostname)
 	if err != nil {
 		return "", false, err
-	}
-
-	log.Println("creating cert...")
-	der, _, err := c.acmeClient.CreateCert(ctx, csr, 0, true)
-	if err != nil {
-		return "", false, err
-	}
-
-	// Serialize it
-	if len(der) == 0 {
-		return "", false, errors.New("no certs returned")
 	}
 
 	log.Println("got it, saving to credhub")
@@ -435,7 +434,8 @@ func (c *config) getMeACert(hostname string) (string, bool, error) {
 		Type:      "json",
 		Overwrite: true,
 		Value: &credhubCert{
-			CA: roots,
+			Source: c.certFactory.Source(),
+			CA:     roots,
 			Certificate: string(pem.EncodeToMemory(&pem.Block{
 				Bytes: der[0],
 				Type:  "CERTIFICATE",
@@ -458,11 +458,6 @@ func (c *config) getMeACert(hostname string) (string, bool, error) {
 }
 
 func (c *config) periodicScan() error {
-	// Wipe the challenge / response map
-	c.challengeMutex.Lock()
-	c.challengeResponse = make(map[string][]byte)
-	c.challengeMutex.Unlock()
-
 	// First, read the data
 	var conf struct {
 		Data []struct {
@@ -533,20 +528,21 @@ func (c *config) updateDaemon() {
 		if err != nil {
 			log.Println("error in periodic scan, ignoring:", err)
 		}
-		time.Sleep(time.Second * time.Duration(c.ACME.Period))
+		time.Sleep(time.Second * time.Duration(c.Period))
 	}
 }
 
 func (c *config) wellKnownHandler(w http.ResponseWriter, r *http.Request) {
-	c.challengeMutex.RLock()
-	v, ok := c.challengeResponse[r.URL.Path]
-	c.challengeMutex.RUnlock()
-
-	if ok {
-		w.Write(v)
-	} else {
-		w.WriteHeader(http.StatusNotFound)
+	if c.ACME != nil {
+		c.ACME.challengeMutex.RLock()
+		v, ok := c.ACME.challengeResponse[r.URL.Path]
+		c.ACME.challengeMutex.RUnlock()
+		if ok {
+			w.Write(v)
+			return
+		}
 	}
+	w.WriteHeader(http.StatusNotFound)
 }
 
 func (c *config) home(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error) {
@@ -641,9 +637,7 @@ func main() {
 			},
 		}).Wrap(conf.createAdminHandler()))
 
-		if !conf.ACME.Disable {
-			go conf.updateDaemon()
-		}
+		go conf.updateDaemon()
 
 		// Start actual responder
 		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", conf.Port), http.HandlerFunc(conf.wellKnownHandler)))
