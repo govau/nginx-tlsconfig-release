@@ -28,14 +28,14 @@ import (
 type config struct {
 	NginxJob string `yaml:"nginx_job"` // name of nginx jobs
 	Template struct {
-		ResponseHost      string `yaml:"responder"`    // will be resolved and added
-		Global            string `yaml:"global"`       // added to global
-		Events            string `yaml:"events"`       // added to events element
-		HTTP              string `yaml:"http"`         // added to http element
-		ACME              string `yaml:"acme"`         // added to http element
-		Server            string `yaml:"server"`       // added within each generated element
-		NoTLSYet          string `yaml:"pre_server"`   // adeded if no other valid server conf exists
-		AdminServerConfig string `yaml:"admin_server"` // config for the admin server
+		ResponseHost      string            `yaml:"responder"`    // will be resolved and added
+		Global            string            `yaml:"global"`       // added to global
+		Events            string            `yaml:"events"`       // added to events element
+		HTTP              string            `yaml:"http"`         // added to http element
+		ACME              string            `yaml:"acme"`         // added to http element
+		Server            map[string]string `yaml:"server"`       // added within each generated element
+		NoTLSYet          string            `yaml:"pre_server"`   // adeded if no other valid server conf exists
+		AdminServerConfig string            `yaml:"admin_server"` // config for the admin server
 	} `yaml:"template"`
 	CredHub   credhub.Client `yaml:"credhub"`
 	Period    int            `yaml:"period"` // seconds between refresh attempts
