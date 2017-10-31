@@ -42,7 +42,7 @@
             </tr>
             {{ range .certs }}
                 <tr>
-                    <td>{{ .Name }}</td>
+                    <td><a href="https://{{ .Name }}">{{ .Name }}</a></td>
                     <td>{{ .DaysRemaining }}</td>
                     <td>{{ .CredHubCert.Source }} [ <a href="#" onclick="return doItS('source','{{ .Path }}');">Change</a> ]</td>
                     <td>
