@@ -32,11 +32,11 @@ func (sss *selfSignedSource) AutoFetchCert(ctx context.Context, pkey *rsa.Privat
 	return [][]byte{cert}, nil
 }
 
-func (sss *selfSignedSource) ManualStartChallenge(ctx context.Context, hostname string) (challenge, error) {
+func (sss *selfSignedSource) ManualStartChallenge(ctx context.Context, hostname string) (*acmeChallenge, error) {
 	return nil, errors.New("manual challenge not needed or supported for self-signed")
 }
 
-func (sss *selfSignedSource) CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, chal challenge) ([][]byte, error) {
+func (sss *selfSignedSource) CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, chal *acmeChallenge) ([][]byte, error) {
 	return nil, errors.New("manual challenge not needed or supported for self-signed")
 }
 

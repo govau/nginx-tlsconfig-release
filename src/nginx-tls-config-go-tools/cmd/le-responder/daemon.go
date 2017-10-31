@@ -21,10 +21,10 @@ type certSource interface {
 	AutoFetchCert(ctx context.Context, pkey *rsa.PrivateKey, hostname string) ([][]byte, error)
 
 	// ManualStartChallenge will return instructions on how to proceed. We'll persist it for you
-	ManualStartChallenge(ctx context.Context, hostname string) (challenge, error)
+	ManualStartChallenge(ctx context.Context, hostname string) (*acmeChallenge, error)
 
 	// CompleteChallenge and issue cert
-	CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, chal challenge) ([][]byte, error)
+	CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, chal *acmeChallenge) ([][]byte, error)
 
 	SupportsManual() bool
 }

@@ -54,14 +54,10 @@ func (acs *acmeCertSource) Init() error {
 	return nil
 }
 
-type challenge interface {
-	Instructions() string
-}
-
 type acmeChallenge struct {
-	Message       string
-	Authorization string
-	Challenge     *acme.Challenge
+	Message       string          `json:"message"`
+	Authorization string          `json:"authorization_uri"`
+	Challenge     *acme.Challenge `json:"challenge"`
 }
 
 func NewDNSChallenge(client *acme.Client, chal *acme.Challenge, hostname, authorization string) (*acmeChallenge, error) {
@@ -83,7 +79,7 @@ func (ac *acmeChallenge) Instructions() string {
 	return ac.Message
 }
 
-func (acs *acmeCertSource) ManualStartChallenge(ctx context.Context, hostname string) (challenge, error) {
+func (acs *acmeCertSource) ManualStartChallenge(ctx context.Context, hostname string) (*acmeChallenge, error) {
 	acs.lock.Lock()
 	defer acs.lock.Unlock()
 
@@ -127,14 +123,9 @@ func (acs *acmeCertSource) SupportsManual() bool {
 	return true
 }
 
-func (acs *acmeCertSource) CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, chal challenge) ([][]byte, error) {
+func (acs *acmeCertSource) CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, ac *acmeChallenge) ([][]byte, error) {
 	acs.lock.Lock()
 	defer acs.lock.Unlock()
-
-	ac, ok := chal.(*acmeChallenge)
-	if !ok {
-		return nil, errors.New("wrong type of data stored against this record")
-	}
 
 	acs.ensureRegistered(ctx)
 
