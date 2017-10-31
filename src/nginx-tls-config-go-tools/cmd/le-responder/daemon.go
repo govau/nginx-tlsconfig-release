@@ -47,7 +47,7 @@ func (dc *daemonConf) Sources() []string {
 	return dc.sources
 }
 
-func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage, observer certObserver) error {
+func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage, observer certObserver, responder responder) error {
 	if dc.Period == 0 {
 		return errors.New("period must be specified and non-zero. should be in seconds")
 	}
@@ -75,9 +75,10 @@ func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage
 			dc.certFactories[name] = &selfSignedSource{}
 		case "acme":
 			v := &acmeCertSource{
-				EmailContact: val.Email,
-				URL:          val.URL,
-				PrivateKey:   val.PrivateKey,
+				EmailContact:    val.Email,
+				URL:             val.URL,
+				PrivateKey:      val.PrivateKey,
+				responderServer: responder,
 			}
 			err = v.Init()
 			if err != nil {
