@@ -18,6 +18,7 @@ type certStorage interface {
 type credhubCert struct {
 	Source      string `json:"source"` // as defined by type
 	Type        string `json:"type"`   // "admin" or ?
+	NeedsNew    bool   `json:"needs_new"`
 	CA          string `json:"ca"`
 	Certificate string `json:"certificate"`
 	PrivateKey  string `json:"private_key"`

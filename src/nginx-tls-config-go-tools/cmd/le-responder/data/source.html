@@ -1,14 +1,13 @@
 <html>
     <head>
-        <title>Create new certificate</title>
+        <title>Change source</title>
     </head>
     <body>
-        <h3>Create new certificate</h3>
+        <h3>Change source</h3>
         <form method="POST" action="/update">
-            <input type="hidden" name="action" value="create" />
-            <p>Host to begin managing:</p>
-            <p><input type="text" name="host" value="" size="72" autofocus="autofocus" /></p>
-            <p>Source:</p>
+            <input type="hidden" name="action" value="source" />
+            <input type="hidden" name="host" value="{{ .host }}" />
+            <p>Change source to:</p>
             <p>
                 <select name="source">
                     {{ range .sources }}

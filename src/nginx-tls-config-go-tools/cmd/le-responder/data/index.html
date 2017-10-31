@@ -2,10 +2,10 @@
     <head>
         <title>Cert tool</title>
         <script type="text/javascript">
-            function doIt(act, path) {
+            function doIt(form, act, path) {
                 document.getElementById("path").value = path;
                 document.getElementById("action").value = act;
-                document.getElementById("f").submit();
+                document.getElementById(form).submit();
                 return false;
             }
         </script>
@@ -16,6 +16,11 @@
             <p style="padding:1em; border:1em; background: rgb(238, 183, 177);">{{ . }}</p>
         {{ end }}
         <form id="f" method="POST" action="/update">
+            <input id="path" type="hidden" name="path" />
+            <input id="action" type="hidden" name="action" />
+            {{ .csrfField }}
+        </form>
+        <form id="s" method="POST" action="/source">
             <input id="path" type="hidden" name="path" />
             <input id="action" type="hidden" name="action" />
             {{ .csrfField }}
@@ -32,10 +37,10 @@
                 <tr>
                     <td>{{ .Name }}</td>
                     <td>{{ .DaysRemaining }}</td>
-                    <td>{{ .CredHubCert.Source }}</td>
+                    <td>{{ .CredHubCert.Source }} [ <a href="#" onclick="return doIt('s','source','{{ .Path }}');">Change</a> ]</td>
                     <td>
-                        {{ if .ShowDelete }}[ <a href="#" onclick="return doIt('delete','{{ .Path }}');">Delete</a> ]{{ end }}
-                        {{ if .ShowRenew }}[ <a href="#" onclick="return doIt('auto','{{ .Path }}');">Renew</a> ]{{ end }}
+                        {{ if .ShowDelete }}[ <a href="#" onclick="return doIt('f','delete','{{ .Path }}');">Delete</a> ]{{ end }}
+                        {{ if .ShowRenew }}[ <a href="#" onclick="return doIt('f','auto','{{ .Path }}');">Renew</a> ]{{ end }}
                     </td>
                 </tr>
             {{ end }}

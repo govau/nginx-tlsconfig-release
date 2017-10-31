@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"sort"
 	"time"
 
 	"github.com/govau/cf-common/credhub"
@@ -23,6 +24,8 @@ type certSource interface {
 type certRenewer interface {
 	RenewCertNow(hostname, cs string) error
 	CanDelete(hostname string) bool
+	Sources() []string
+	UpdateObservers() error
 }
 
 type daemonConf struct {
@@ -36,9 +39,15 @@ type daemonConf struct {
 	storage    certStorage
 
 	certFactories map[string]certSource
+	sources       []string
+	observer      certObserver
 }
 
-func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage) error {
+func (dc *daemonConf) Sources() []string {
+	return dc.sources
+}
+
+func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage, observer certObserver) error {
 	if dc.Period == 0 {
 		return errors.New("period must be specified and non-zero. should be in seconds")
 	}
@@ -59,6 +68,7 @@ func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage
 	dc.fixedHosts = []string{hn}
 
 	dc.certFactories = make(map[string]certSource)
+	dc.sources = nil
 	for name, val := range sm {
 		switch val.Type {
 		case "self-signed":
@@ -78,6 +88,8 @@ func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage
 		default:
 			return errors.New("unknown cert source type")
 		}
+
+		dc.sources = append(dc.sources, name)
 	}
 
 	if len(dc.certFactories) == 0 {
@@ -85,6 +97,10 @@ func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage
 	}
 
 	dc.storage = storage
+
+	sort.StringSlice(dc.sources).Sort()
+
+	dc.observer = observer
 
 	return nil
 }
@@ -133,6 +149,10 @@ func (dc *daemonConf) renewCertIfNeeded(hostname string) error {
 		}
 
 		if pc.NotAfter.Before(time.Now().Add(24 * time.Hour * time.Duration(dc.DaysBefore))) {
+			needNew = true
+		}
+
+		if chc.NeedsNew {
 			needNew = true
 		}
 	}
@@ -211,7 +231,20 @@ func (dc *daemonConf) RenewCertNow(hostname, cs string) error {
 		return err
 	}
 
+	err = dc.UpdateObservers()
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (dc *daemonConf) UpdateObservers() error {
+	certs, err := dc.storage.FetchCerts()
+	if err != nil {
+		return err
+	}
+	return dc.observer.CertsAreUpdated(certs)
 }
 
 func (dc *daemonConf) periodicScan() error {

@@ -74,7 +74,22 @@ func (as *adminServer) RunForever() {
 }
 
 func (as *adminServer) add(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+	return map[string]interface{}{
+		"sources": as.certRenewer.Sources(),
+	}, nil
+}
+
+func (as *adminServer) source(vars map[string]string, liu *uaa.LoggedInUser, w http.ResponseWriter, r *http.Request) (map[string]interface{}, error) {
+	hostname := hostFromPath(r.FormValue("path"))
+	if hostname == "" {
+		as.flashMessage(w, r, "cannot find cert")
+		http.Redirect(w, r, "/", http.StatusFound)
+		return nil, nil
+	}
+	return map[string]interface{}{
+		"host":    hostname,
+		"sources": as.certRenewer.Sources(),
+	}, nil
 }
 
 func (as *adminServer) flashMessage(w http.ResponseWriter, r *http.Request, m string) {
@@ -106,8 +121,6 @@ func (as *adminServer) update(vars map[string]string, liu *uaa.LoggedInUser, w h
 			break
 		}
 
-		// TODO -check in source map
-
 		err = as.storage.SavePath(path, &credhubCert{
 			Source: source,
 		})
@@ -134,7 +147,13 @@ func (as *adminServer) update(vars map[string]string, liu *uaa.LoggedInUser, w h
 			break
 		}
 
-		as.flashMessage(w, r, "cert successfully renewed")
+		err = as.certRenewer.UpdateObservers()
+		if err != nil {
+			as.flashMessage(w, r, err.Error())
+			break
+		}
+
+		as.flashMessage(w, r, "cert successfully deleted")
 		break
 
 	case "auto":
@@ -144,15 +163,12 @@ func (as *adminServer) update(vars map[string]string, liu *uaa.LoggedInUser, w h
 			break
 		}
 
-		source := r.FormValue("source")
-		if len(source) == 0 {
-			as.flashMessage(w, r, "empty source")
-			break
+		chd, err := as.storage.LoadPath(pathFromHost(hostname))
+		if err != nil {
+			as.flashMessage(w, r, err.Error())
 		}
 
-		// TODO -check in source map
-
-		err := as.certRenewer.RenewCertNow(hostname, source)
+		err = as.certRenewer.RenewCertNow(hostname, chd.Source)
 		if err != nil {
 			as.flashMessage(w, r, err.Error())
 			break
@@ -160,6 +176,36 @@ func (as *adminServer) update(vars map[string]string, liu *uaa.LoggedInUser, w h
 
 		as.flashMessage(w, r, "cert successfully renewed")
 		break
+
+	case "source":
+		hostname := r.FormValue("host")
+		if len(hostname) == 0 {
+			as.flashMessage(w, r, "empty hostname")
+			break
+		}
+		path := pathFromHost(hostname)
+
+		// Look to see if it exists
+		existing, err := as.storage.LoadPath(path)
+		if err != nil {
+			as.flashMessage(w, r, err.Error())
+			break
+		}
+
+		source := r.FormValue("source")
+		if len(source) == 0 {
+			as.flashMessage(w, r, "empty source")
+			break
+		}
+
+		existing.Source = source
+		existing.NeedsNew = true
+
+		err = as.storage.SavePath(path, existing)
+		if err != nil {
+			as.flashMessage(w, r, err.Error())
+			break
+		}
 
 	default:
 		as.flashMessage(w, r, "unknown action")
@@ -277,6 +323,7 @@ func (as *adminServer) createAdminHandler() http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/", as.wrapWithClient("index.html", as.home))
 	r.HandleFunc("/add", as.wrapWithClient("add.html", as.add))
+	r.HandleFunc("/source", as.wrapWithClient("source.html", as.source))
 	r.HandleFunc("/update", as.wrapWithClient("", as.update)) // will redirect back to home
 
 	// TODO, check whether cast is really the right thing here...
