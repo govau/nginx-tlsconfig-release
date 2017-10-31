@@ -107,6 +107,15 @@ func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage
 
 func (dc *daemonConf) RunForever() {
 	for {
+		err := dc.UpdateObservers()
+		if err != nil {
+			log.Println("error bootstrapping observers, will try again later:", err)
+		} else {
+			break
+		}
+		time.Sleep(time.Second * 10)
+	}
+	for {
 		err := dc.periodicScan()
 		if err != nil {
 			log.Println("error in periodic scan, ignoring:", err)
@@ -248,8 +257,10 @@ func (dc *daemonConf) UpdateObservers() error {
 }
 
 func (dc *daemonConf) periodicScan() error {
+	log.Println("in periodic scan...")
 	// Next, see if our root cert exists
 	for _, fh := range dc.fixedHosts {
+		log.Println("checking", fh)
 		err := dc.renewCertIfNeeded(fh)
 		if err != nil {
 			return err

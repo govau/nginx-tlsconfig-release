@@ -6,6 +6,10 @@ go generate ./cmd/le-responder && \
     GOOS=linux GOARCH=amd64 go build ./cmd/le-responder && \
     bosh scp -d cf le-responder tls-credhub/0:/tmp/le-responder && \
     bosh ssh -d cf tls-credhub/0 'sudo bash -c "rm /var/vcap/packages/nginx-tls-config-go-tools/bin/le-responder && cp /tmp/le-responder /var/vcap/packages/nginx-tls-config-go-tools/bin && /var/vcap/bosh/bin/monit restart le-responder /var/vcap/packages/nginx-tls-config-go-tools/bin/"'
+# To deploy quick update to bosh lite
+GOOS=linux GOARCH=amd64 go build ./cmd/gen-nginx-config && \
+    bosh scp -d cf gen-nginx-config router/0:/tmp/gen-nginx-config && \
+    bosh ssh -d cf router/0 'sudo bash -c "rm /var/vcap/packages/nginx-tls-config-go-tools/bin/gen-nginx-config && cp /tmp/gen-nginx-config /var/vcap/packages/nginx-tls-config-go-tools/bin && /var/vcap/bosh/bin/monit restart gen-nginx-config /var/vcap/packages/nginx-tls-config-go-tools/bin/"'
 
 # To get admin password:
 credhub get -n /main/cf/cf_admin_password
@@ -21,7 +25,6 @@ bosh -d cf deploy -n cf-deployment.yml \
   -o ~/Documents/dta/ops/terraform/modules/opensourcecf/installer/files/wrap-go-router-with-nginx.yml \
   -v certs_le_contact_email=adam.eijdenberg@digital.gov.au \
   -v certs_le_external_domain=cm.le.bosh-lite.com \
-  -v cert_source=self-signed \
   -o certs.yml
 ```
 
@@ -29,7 +32,7 @@ Local `certs.yml`:
 
 ```bash
 - type: replace
-  path: /instance_groups/name=tls-credhub/jobs/name=le-responder/properties/config/admin/external_url
+  path: /instance_groups/name=tls-credhub/jobs/name=le-responder/properties/config/servers/admin_ui/external_url
   value: https://((certs_le_external_domain)):8452
 
 - type: replace

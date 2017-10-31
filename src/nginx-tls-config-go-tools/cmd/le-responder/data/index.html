@@ -2,10 +2,16 @@
     <head>
         <title>Cert tool</title>
         <script type="text/javascript">
-            function doIt(form, act, path) {
+            function doItU(act, path) {
                 document.getElementById("path").value = path;
                 document.getElementById("action").value = act;
-                document.getElementById(form).submit();
+                document.getElementById("f").submit();
+                return false;
+            }
+            function doItS(act, path) {
+                document.getElementById("Spath").value = path;
+                document.getElementById("Saction").value = act;
+                document.getElementById("Sf").submit();
                 return false;
             }
         </script>
@@ -20,9 +26,9 @@
             <input id="action" type="hidden" name="action" />
             {{ .csrfField }}
         </form>
-        <form id="s" method="POST" action="/source">
-            <input id="path" type="hidden" name="path" />
-            <input id="action" type="hidden" name="action" />
+        <form id="Sf" method="POST" action="/source">
+            <input id="Spath" type="hidden" name="path" />
+            <input id="Saction" type="hidden" name="action" />
             {{ .csrfField }}
         </form>
         <p>Certificates managed:</p>
@@ -37,10 +43,10 @@
                 <tr>
                     <td>{{ .Name }}</td>
                     <td>{{ .DaysRemaining }}</td>
-                    <td>{{ .CredHubCert.Source }} [ <a href="#" onclick="return doIt('s','source','{{ .Path }}');">Change</a> ]</td>
+                    <td>{{ .CredHubCert.Source }} [ <a href="#" onclick="return doItS('source','{{ .Path }}');">Change</a> ]</td>
                     <td>
-                        {{ if .ShowDelete }}[ <a href="#" onclick="return doIt('f','delete','{{ .Path }}');">Delete</a> ]{{ end }}
-                        {{ if .ShowRenew }}[ <a href="#" onclick="return doIt('f','auto','{{ .Path }}');">Renew</a> ]{{ end }}
+                        {{ if .ShowDelete }}[ <a href="#" onclick="return doItU('delete','{{ .Path }}');">Delete</a> ]{{ end }}
+                        {{ if .ShowRenew }}[ <a href="#" onclick="return doItU('auto','{{ .Path }}');">Renew</a> ]{{ end }}
                     </td>
                 </tr>
             {{ end }}

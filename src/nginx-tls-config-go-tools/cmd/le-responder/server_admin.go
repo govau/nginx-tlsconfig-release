@@ -302,6 +302,11 @@ func (as *adminServer) wrapWithClient(tmpl string, f func(vars map[string]string
 			return
 		}
 
+		// then we must have already redirected or similar
+		if toPass == nil {
+			return
+		}
+
 		// If no template is desired, then stop here
 		if tmpl == "" {
 			return

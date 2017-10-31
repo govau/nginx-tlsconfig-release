@@ -106,6 +106,10 @@ func (c *config) ReloadNginx() error {
 
 // Returns (did we write a new file)
 func (c *config) SaveSafe(name string, data []byte) (bool, error) {
+	if name == "nginx.conf" {
+		data = []byte(strings.Replace(string(data), "{{PWD}}", c.configDir, -1))
+	}
+
 	fpath := filepath.Join(c.configDir, name)
 
 	// See if we can avoid...
@@ -168,10 +172,10 @@ func (c *config) tryUpdate() (bool, error) {
 		header, err := tarReader.Next()
 		switch {
 		case err == io.EOF:
-			return false, nil
+			return retDirty, nil
 
 		case err != nil:
-			return retDirty, err
+			return false, err
 
 		case header != nil && header.Typeflag == tar.TypeReg:
 			data := make([]byte, header.Size)

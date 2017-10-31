@@ -31,6 +31,9 @@ func pathFromHost(hostname string) string {
 }
 
 func hostFromPath(path string) string {
+	if len(path) < len("/certs/") {
+		return ""
+	}
 	b, err := hex.DecodeString(path[len("/certs/"):])
 	if err != nil {
 		return ""

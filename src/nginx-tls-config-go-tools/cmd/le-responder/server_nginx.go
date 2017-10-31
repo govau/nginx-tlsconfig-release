@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -47,7 +48,9 @@ type nginxServer struct {
 }
 
 func (n *nginxServer) CertsAreUpdated(certs []*credhubCert) error {
+	log.Println("in certs are updated")
 	n.bytesMutex.Lock()
+	log.Println("past lock")
 	defer n.bytesMutex.Unlock()
 
 	ips, err := net.LookupIP(n.Hostname)
@@ -70,9 +73,10 @@ func (n *nginxServer) CertsAreUpdated(certs []*credhubCert) error {
 
 		pkeyBytes := []byte(cert.PrivateKey)
 		err := tarWriter.WriteHeader(&tar.Header{
-			Name: he + ".key",
-			Mode: 0600,
-			Size: int64(len(pkeyBytes)),
+			Name:     he + ".key",
+			Mode:     0600,
+			Size:     int64(len(pkeyBytes)),
+			Typeflag: tar.TypeReg,
 		})
 		if err != nil {
 			return err
@@ -84,9 +88,10 @@ func (n *nginxServer) CertsAreUpdated(certs []*credhubCert) error {
 
 		certBytes := []byte(cert.Certificate)
 		err = tarWriter.WriteHeader(&tar.Header{
-			Name: he + ".crt",
-			Mode: 0600,
-			Size: int64(len(certBytes)),
+			Name:     he + ".crt",
+			Mode:     0600,
+			Size:     int64(len(certBytes)),
+			Typeflag: tar.TypeReg,
 		})
 		if err != nil {
 			return err
@@ -98,8 +103,8 @@ func (n *nginxServer) CertsAreUpdated(certs []*credhubCert) error {
 
 		serverStanzas = append(serverStanzas, fmt.Sprintf(`server {
 			server_name %s;
-			ssl_certificate %s.crt;
-			ssl_certificate_key %s.key;
+			ssl_certificate {{PWD}}/%s.crt;
+			ssl_certificate_key {{PWD}}/%s.key;
 			%s
 			%s
 		}`, hn, he, he, n.Template.Common, n.Template.PerServer[cert.Type]))
@@ -120,12 +125,13 @@ func (n *nginxServer) CertsAreUpdated(certs []*credhubCert) error {
 			}
 			# Per server SSL
 			%s
-		}`, n.Template.Global, n.Template.Events, n.Template.ACME, n.Template.HTTP, strings.Join(serverStanzas, "\n")), "IP_ADDRESS", ourIP, -1))
+		}`, n.Template.Global, n.Template.Events, n.Template.ACME, n.Template.HTTP, strings.Join(serverStanzas, "\n")), "IP_ADDR", ourIP, -1))
 
 	err = tarWriter.WriteHeader(&tar.Header{
-		Name: "nginx.conf",
-		Mode: 0600,
-		Size: int64(len(nginxConf)),
+		Name:     "nginx.conf",
+		Mode:     0600,
+		Size:     int64(len(nginxConf)),
+		Typeflag: tar.TypeReg,
 	})
 	if err != nil {
 		return err
@@ -144,6 +150,8 @@ func (n *nginxServer) CertsAreUpdated(certs []*credhubCert) error {
 	}
 
 	n.cachedBytes = buffer.Bytes()
+
+	log.Println("finished")
 
 	return nil
 }
@@ -172,9 +180,12 @@ func (n *nginxServer) handle(w http.ResponseWriter, r *http.Request) {
 	defer n.bytesMutex.RUnlock()
 
 	if len(n.cachedBytes) == 0 {
+		log.Println("we don't have any bytes")
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
+
+	log.Println("writing bytes", len(n.cachedBytes))
 
 	w.Write(n.cachedBytes)
 }
@@ -197,11 +208,12 @@ func (n *nginxServer) RunForever() error {
 				}
 				for _, cn := range n.Clients.Names {
 					if cert.Subject.CommonName == cn {
+						log.Println("cert matches good")
 						return nil // all good
 					}
 				}
 				return errors.New("wrong name in cert")
 			},
 		},
-	}).ListenAndServe()
+	}).ListenAndServeTLS("", "") // leave empty as we already have set via tls.Config
 }
