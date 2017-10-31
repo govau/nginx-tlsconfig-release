@@ -37,6 +37,7 @@
                 <th>Name</th>
                 <th>Days Remaining</th>
                 <th>Source</th>
+                <th>Challenge</th>
                 <th>Actions</th>
             </tr>
             {{ range .certs }}
@@ -45,8 +46,15 @@
                     <td>{{ .DaysRemaining }}</td>
                     <td>{{ .CredHubCert.Source }} [ <a href="#" onclick="return doItS('source','{{ .Path }}');">Change</a> ]</td>
                     <td>
+                        {{ if .CredHubCert.Challenge }}
+                            <pre>{{ .CredHubCert.Challenge.Instructions }}</pre>
+                            [ <a href="#" onclick="return doItU('complete','{{ .Path }}');">Complete</a> ]
+                        {{ end }}
+                    </td>
+                    <td>
                         {{ if .ShowDelete }}[ <a href="#" onclick="return doItU('delete','{{ .Path }}');">Delete</a> ]{{ end }}
                         {{ if .ShowRenew }}[ <a href="#" onclick="return doItU('auto','{{ .Path }}');">Renew</a> ]{{ end }}
+                        {{ if .ShowManual }}[ <a href="#" onclick="return doItU('manual','{{ .Path }}');">Manual</a> ]{{ end }}
                     </td>
                 </tr>
             {{ end }}

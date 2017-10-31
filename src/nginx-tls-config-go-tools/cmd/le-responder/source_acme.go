@@ -8,7 +8,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log"
+	"sync"
 
 	"golang.org/x/crypto/acme"
 )
@@ -23,7 +25,9 @@ type acmeCertSource struct {
 	URL          string
 	EmailContact string
 
-	responderServer     responder
+	responderServer responder
+
+	lock                sync.Mutex
 	acmeClient          *acme.Client
 	acmeKnownRegistered bool
 }
@@ -50,23 +54,115 @@ func (acs *acmeCertSource) Init() error {
 	return nil
 }
 
-func (acs *acmeCertSource) AutoFetchCert(ctx context.Context, pkey *rsa.PrivateKey, hostname string) ([][]byte, error) {
-	if !acs.acmeKnownRegistered {
-		log.Println("Always try to register on startup, who cares if we already have...")
-		_, err := acs.acmeClient.Register(ctx, &acme.Account{
-			Contact: []string{"mailto:" + acs.EmailContact},
-		}, acme.AcceptTOS)
-		if err != nil {
-			log.Println("Error registering with LE - we've likely already done so, so ignoring:", err)
-		}
-	}
+type challenge interface {
+	Instructions() string
+}
 
-	log.Println("try to authorize...")
+type acmeChallenge struct {
+	Message       string
+	Authorization string
+	Challenge     *acme.Challenge
+}
+
+func NewDNSChallenge(client *acme.Client, chal *acme.Challenge, hostname, authorization string) (*acmeChallenge, error) {
+	val, err := client.DNS01ChallengeRecord(chal.Token)
+	if err != nil {
+		return nil, err
+	}
+	msg := fmt.Sprintf(`Create DNS TXT record:
+Name:  _acme-challenge.%s.
+Value: %s`, hostname, val)
+	return &acmeChallenge{
+		Message:       msg,
+		Authorization: authorization,
+		Challenge:     chal,
+	}, nil
+}
+
+func (ac *acmeChallenge) Instructions() string {
+	return ac.Message
+}
+
+func (acs *acmeCertSource) ManualStartChallenge(ctx context.Context, hostname string) (challenge, error) {
+	acs.lock.Lock()
+	defer acs.lock.Unlock()
+
+	acs.ensureRegistered(ctx)
 	authz, err := acs.acmeClient.Authorize(ctx, hostname)
 	if err != nil {
 		return nil, err
 	}
+	if authz.Status == acme.StatusValid {
+		return nil, errors.New("already authorized, no challenge needed")
+	}
+	var chal *acme.Challenge
+	for _, c := range authz.Challenges {
+		if c.Type == "dns-01" {
+			chal = c
+			break
+		}
+	}
+	if chal == nil {
+		return nil, errors.New("no supported challenge type found")
+	}
 
+	return NewDNSChallenge(acs.acmeClient, chal, hostname, authz.URI)
+}
+
+func (acs *acmeCertSource) ensureRegistered(ctx context.Context) {
+	if acs.acmeKnownRegistered {
+		return
+	}
+
+	log.Println("Always try to register on startup, who cares if we already have...")
+	_, err := acs.acmeClient.Register(ctx, &acme.Account{
+		Contact: []string{"mailto:" + acs.EmailContact},
+	}, acme.AcceptTOS)
+	if err != nil {
+		log.Println("Error registering with LE - we've likely already done so, so ignoring:", err)
+	}
+}
+
+func (acs *acmeCertSource) SupportsManual() bool {
+	return true
+}
+
+func (acs *acmeCertSource) CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, chal challenge) ([][]byte, error) {
+	acs.lock.Lock()
+	defer acs.lock.Unlock()
+
+	ac, ok := chal.(*acmeChallenge)
+	if !ok {
+		return nil, errors.New("wrong type of data stored against this record")
+	}
+
+	acs.ensureRegistered(ctx)
+
+	log.Println("accepting dns challenge...")
+
+	_, err := acs.acmeClient.Accept(ctx, ac.Challenge)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Println("waiting authorization...")
+	_, err = acs.acmeClient.WaitAuthorization(ctx, ac.Authorization)
+	if err != nil {
+		return nil, err
+	}
+
+	return acs.issueCert(ctx, hostname, pkey)
+}
+
+func (acs *acmeCertSource) AutoFetchCert(ctx context.Context, pkey *rsa.PrivateKey, hostname string) ([][]byte, error) {
+	acs.lock.Lock()
+	defer acs.lock.Unlock()
+
+	acs.ensureRegistered(ctx)
+	authz, err := acs.acmeClient.Authorize(ctx, hostname)
+	if err != nil {
+		return nil, err
+	}
 	if authz.Status == acme.StatusValid {
 		log.Println("already valid!")
 	} else {
@@ -104,6 +200,10 @@ func (acs *acmeCertSource) AutoFetchCert(ctx context.Context, pkey *rsa.PrivateK
 		}
 	}
 
+	return acs.issueCert(ctx, hostname, pkey)
+}
+
+func (acs *acmeCertSource) issueCert(ctx context.Context, hostname string, pkey *rsa.PrivateKey) ([][]byte, error) {
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		Subject: pkix.Name{
 			CommonName: hostname,

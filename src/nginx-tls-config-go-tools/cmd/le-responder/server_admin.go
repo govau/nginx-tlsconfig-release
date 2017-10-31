@@ -177,6 +177,38 @@ func (as *adminServer) update(vars map[string]string, liu *uaa.LoggedInUser, w h
 		as.flashMessage(w, r, "cert successfully renewed")
 		break
 
+	case "manual":
+		hostname := hostFromPath(r.FormValue("path"))
+		if hostname == "" {
+			as.flashMessage(w, r, "cannot find cert")
+			break
+		}
+
+		err := as.certRenewer.StartManualChallenge(hostname)
+		if err != nil {
+			as.flashMessage(w, r, err.Error())
+			break
+		}
+
+		as.flashMessage(w, r, "cert challenge started")
+		break
+
+	case "complete":
+		hostname := hostFromPath(r.FormValue("path"))
+		if hostname == "" {
+			as.flashMessage(w, r, "cannot find cert")
+			break
+		}
+
+		err := as.certRenewer.CompleteChallenge(hostname)
+		if err != nil {
+			as.flashMessage(w, r, err.Error())
+			break
+		}
+
+		as.flashMessage(w, r, "cert issued")
+		break
+
 	case "source":
 		hostname := r.FormValue("host")
 		if len(hostname) == 0 {
@@ -221,6 +253,7 @@ type uiCert struct {
 	Path          string
 	ShowDelete    bool
 	ShowRenew     bool
+	ShowManual    bool
 	DaysRemaining int
 	CredHubCert   *credhubCert
 }
@@ -264,6 +297,7 @@ func (as *adminServer) home(vars map[string]string, liu *uaa.LoggedInUser, w htt
 			DaysRemaining: daysRemaining,
 			ShowDelete:    as.certRenewer.CanDelete(nameToShow),
 			ShowRenew:     true,
+			ShowManual:    as.certRenewer.SourceCanManual(curCred.Source),
 			CredHubCert:   curCred,
 		}
 	}

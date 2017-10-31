@@ -19,13 +19,24 @@ import (
 type certSource interface {
 	// AutoFetchCert will try to fetch a cert now for the hostname and given context (you should set this to timeout)
 	AutoFetchCert(ctx context.Context, pkey *rsa.PrivateKey, hostname string) ([][]byte, error)
+
+	// ManualStartChallenge will return instructions on how to proceed. We'll persist it for you
+	ManualStartChallenge(ctx context.Context, hostname string) (challenge, error)
+
+	// CompleteChallenge and issue cert
+	CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, chal challenge) ([][]byte, error)
+
+	SupportsManual() bool
 }
 
 type certRenewer interface {
 	RenewCertNow(hostname, cs string) error
 	CanDelete(hostname string) bool
 	Sources() []string
+	SourceCanManual(string) bool
 	UpdateObservers() error
+	StartManualChallenge(hostname string) error
+	CompleteChallenge(hostname string) error
 }
 
 type daemonConf struct {
@@ -45,6 +56,14 @@ type daemonConf struct {
 
 func (dc *daemonConf) Sources() []string {
 	return dc.sources
+}
+
+func (dc *daemonConf) SourceCanManual(cs string) bool {
+	cf, ok := dc.certFactories[cs]
+	if !ok {
+		return false
+	}
+	return cf.SupportsManual()
 }
 
 func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage, observer certObserver, responder responder) error {
@@ -188,8 +207,53 @@ func (dc *daemonConf) CanDelete(hostname string) bool {
 	return true
 }
 
-func (dc *daemonConf) RenewCertNow(hostname, cs string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+func (dc *daemonConf) StartManualChallenge(hostname string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+
+	path := pathFromHost(hostname)
+	curCert, err := dc.storage.LoadPath(path)
+	if err != nil {
+		return err
+	}
+
+	cf, ok := dc.certFactories[curCert.Source]
+	if !ok {
+		return fmt.Errorf("no cert source found for: %s", curCert.Source)
+	}
+
+	chal, err := cf.ManualStartChallenge(ctx, hostname)
+	if err != nil {
+		return err
+	}
+
+	curCert.Challenge = chal
+
+	err = dc.storage.SavePath(path, curCert)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (dc *daemonConf) CompleteChallenge(hostname string) error {
+	chd, err := dc.storage.LoadPath(pathFromHost(hostname))
+	if err != nil {
+		return err
+	}
+
+	if chd.Challenge == nil {
+		return errors.New("challenge not set")
+	}
+
+	return dc.getCertAndSave(hostname, chd.Source, func(ctx context.Context, cf certSource, pkey *rsa.PrivateKey) ([][]byte, error) {
+		return cf.CompleteChallenge(ctx, pkey, hostname, chd.Challenge)
+	})
+}
+
+func (dc *daemonConf) getCertAndSave(hostname, cs string, issuer func(context.Context, certSource, *rsa.PrivateKey) ([][]byte, error)) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
 	pkey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -204,7 +268,7 @@ func (dc *daemonConf) RenewCertNow(hostname, cs string) error {
 		return fmt.Errorf("no cert source found for: %s", cs)
 	}
 
-	der, err := cf.AutoFetchCert(ctx, pkey, hostname)
+	der, err := issuer(ctx, cf, pkey)
 	if err != nil {
 		return err
 	}
@@ -247,6 +311,12 @@ func (dc *daemonConf) RenewCertNow(hostname, cs string) error {
 	}
 
 	return nil
+}
+
+func (dc *daemonConf) RenewCertNow(hostname, cs string) error {
+	return dc.getCertAndSave(hostname, cs, func(ctx context.Context, cf certSource, pkey *rsa.PrivateKey) ([][]byte, error) {
+		return cf.AutoFetchCert(ctx, pkey, hostname)
+	})
 }
 
 func (dc *daemonConf) UpdateObservers() error {

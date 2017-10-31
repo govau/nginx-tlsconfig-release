@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"time"
 )
@@ -29,4 +30,16 @@ func (sss *selfSignedSource) AutoFetchCert(ctx context.Context, pkey *rsa.Privat
 		return nil, err
 	}
 	return [][]byte{cert}, nil
+}
+
+func (sss *selfSignedSource) ManualStartChallenge(ctx context.Context, hostname string) (challenge, error) {
+	return nil, errors.New("manual challenge not needed or supported for self-signed")
+}
+
+func (sss *selfSignedSource) CompleteChallenge(ctx context.Context, pkey *rsa.PrivateKey, hostname string, chal challenge) ([][]byte, error) {
+	return nil, errors.New("manual challenge not needed or supported for self-signed")
+}
+
+func (sss *selfSignedSource) SupportsManual() bool {
+	return false
 }
