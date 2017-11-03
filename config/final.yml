@@ -4,4 +4,4 @@ blobstore:
   provider: s3
   options:
     region: ap-southeast-2
-    bucket_name: nginx-tlsconfig-public-access
+    bucket_name: dta-nginx-tlsconfig-boshrelease
