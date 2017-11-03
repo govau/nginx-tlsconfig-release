@@ -1,0 +1,8 @@
+---
+name: le-responder
+
+dependencies:
+- golang
+
+files:
+- le-responder/**/*.go

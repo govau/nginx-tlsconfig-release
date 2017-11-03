@@ -6,7 +6,7 @@ templates:
   config.yml.erb: config/config.yml
 
 packages:
-- nginx-tls-config-go-tools
+- le-responder
 
 properties:
   config:

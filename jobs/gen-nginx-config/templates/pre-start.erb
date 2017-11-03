@@ -2,7 +2,7 @@
 
 set -eu
 
-JOB_NAME=gen-nginx-config
-CONF_DIR=/var/vcap/jobs/$JOB_NAME/config
+JOB=gen-nginx-config
+CONF_DIR=/var/vcap/jobs/${JOB}/config
 
-/var/vcap/packages/nginx-tls-config-go-tools/bin/gen-nginx-config -config $CONF_DIR/config.yml
+/var/vcap/packages/${JOB}/bin/${JOB} -config $CONF_DIR/config.yml

@@ -7,7 +7,7 @@ templates:
   pre-start.erb: bin/pre-start
 
 packages:
-- nginx-tls-config-go-tools
+- gen-nginx-config
 
 properties:
   config:
