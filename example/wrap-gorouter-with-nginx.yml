@@ -12,9 +12,9 @@
   path: /releases/-
   value:
     name: nginx-tlsconfig
-    url: https://github.com/govau/nginx-tlsconfig-release/releases/download/v3.0.0/nginx-tlsconfig-3.0.0.tgz
-    version: 3.0.0
-    sha1: dfcd1c665de87df97853b4699b709259dfac5a14
+    url: https://github.com/govau/nginx-tlsconfig-release/releases/download/v3.0.2/nginx-tlsconfig-3.0.2.tgz
+    version: 3.0.2
+    sha1: 222dd1de2f03826d6948f67458ebf2c02f000f11
 
 # Pull in latest version of CredHub for our instance
 - type: replace

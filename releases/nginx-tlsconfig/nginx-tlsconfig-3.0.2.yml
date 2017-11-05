@@ -1,0 +1,35 @@
+name: nginx-tlsconfig
+version: 3.0.2
+commit_hash: 48d3866
+uncommitted_changes: false
+jobs:
+- name: gen-nginx-config
+  version: 871dd51b35c89ff80f78537922c9098202d4e0e3
+  fingerprint: 871dd51b35c89ff80f78537922c9098202d4e0e3
+  sha1: 4fb16685042b7e5956b636d0a213ef657daf93bf
+- name: le-responder
+  version: b722c41e1a5212aea3e9487642c189f8176820a3
+  fingerprint: b722c41e1a5212aea3e9487642c189f8176820a3
+  sha1: fa14a791cb391f1730bf9bcf73e22f74bee0a0a1
+packages:
+- name: gen-nginx-config
+  version: 21093e65020d0596ef0f06bc4af7678aecf4f9df
+  fingerprint: 21093e65020d0596ef0f06bc4af7678aecf4f9df
+  sha1: 3d348df1ea826182f9e510009f446d1271ed21f7
+  dependencies:
+  - golang
+- name: golang
+  version: 8883f853a0982db91c1cbbdaf3f62d69eee845b3
+  fingerprint: 8883f853a0982db91c1cbbdaf3f62d69eee845b3
+  sha1: 044b2c68a5f7e1eefd3d05ec155db736e1066def
+  dependencies: []
+- name: le-responder
+  version: 22a2d2a692a4bd675c5195d0264e44328240edcc
+  fingerprint: 22a2d2a692a4bd675c5195d0264e44328240edcc
+  sha1: c7cbee2fc385dc152cb7c47ee8043b0fa872e048
+  dependencies:
+  - golang
+license:
+  version: 10b395e52546d70e842f9f583bbcc626b8bf321c
+  fingerprint: 10b395e52546d70e842f9f583bbcc626b8bf321c
+  sha1: 2acb142d9be23d8854edce5cb5cf31ebeade2a15
