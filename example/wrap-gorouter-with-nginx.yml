@@ -7,12 +7,14 @@
     version: 1.12.2
     sha1: e5e5f54d46e2a70fac85ba16e96ccb7e4148bdfa
 
-# Pull in our magic
+# Pull nginx-tlsconfig
 - type: replace
   path: /releases/-
   value:
     name: nginx-tlsconfig
-    version: latest
+    url: https://github.com/govau/nginx-tlsconfig-release/releases/download/v3.0.0/nginx-tlsconfig-3.0.0.tgz
+    version: 3.0.0
+    sha1: dfcd1c665de87df97853b4699b709259dfac5a14
 
 # Pull in latest version of CredHub for our instance
 - type: replace
@@ -23,9 +25,9 @@
     version: 1.6.1
     sha1: 5b3a4ff2cd51d6167bc53eeb8abd47b292e2186f
 
-# Create MySQL database for CredHub 
+# Create MySQL database for CredHub
 - type: replace
-  path: /instance_groups/name=mysql/jobs/name=mysql/properties/cf_mysql/mysql/seeded_databases/-
+  path: /instance_groups/name=singleton-database/jobs/name=mysql/properties/cf_mysql/mysql/seeded_databases/-
   value:
     name: tlscredhub
     username: tlscredhub
@@ -36,6 +38,19 @@
   value:
     name: tlscredhub_database_password
     type: password
+
+# ACME Key
+- type: replace
+  path: /variables/-
+  value:
+    name: acme_key
+    type: rsa
+
+- type: replace
+  path: /variables/-
+  value:
+    name: acme_staging_key
+    type: rsa
 
 # Instantiate CredHub instance
 - type: replace
@@ -61,6 +76,113 @@
             services:
               credhub:
                 name: tls-credhub
+                check: {} # TODO, healthcheck
+              le-responder:
+                name: le-responder
+                check: {} # TODO, healthcheck
+    - name: le-responder
+      release: nginx-tlsconfig
+      properties:
+        config:
+          sources:
+            self-signed:
+              type: self-signed
+            le-prod:
+              type: acme
+              private_key: ((acme_key.private_key))
+              url: https://acme-v01.api.letsencrypt.org/directory
+              email: ((certs_le_contact_email))
+            le-staging:
+              type: acme
+              private_key: ((acme_staging_key.private_key))
+              url: https://acme-staging.api.letsencrypt.org/directory
+              email: ((certs_le_contact_email))
+
+          daemon:
+            bootstrap:
+              source: self-signed
+            days_before: 30
+            period: 86400
+
+          data:
+            credhub:
+              uaa_url: https://uaa.service.cf.internal:8443
+              uaa_ca_certificates:
+              - ((uaa_ca.certificate))
+              client_id: le_responder
+              client_secret: ((le_responder_client_secret))
+              credhub_url: https://tls-credhub.service.cf.internal:8844
+              credhub_ca_certificates:
+              - ((tls_credhub_ca.certificate))
+
+          servers:
+            acme_responder:
+              port: 8478
+
+            admin_ui:
+              port: 8427
+              uaa:
+                client_id: le-responder-user-client
+                client_secret: ((le-responder-user-client-secret))
+                internal_url: https://uaa.service.cf.internal:8443
+                external_url: https://uaa.((system_domain))
+                ca_certs:
+                - ((uaa_ca.certificate))
+              csrf_key: ((le-responder-csrf-key))
+              external_url: https://((certs_le_external_domain))
+              allowed_users:
+              - admin
+
+            nginx_config:
+              port: 23352
+              clients:
+                names:
+                - router.service.cf.internal
+                ca_certificates:
+                - ((tls_credhub_ca.certificate))
+              certificate: ((tls_credhub_server))
+              hostname: le-responder.service.cf.internal
+              template:
+                global: |
+                  worker_processes 1;
+                  error_log  /var/vcap/sys/log/nginx/error.log info;
+                events: |
+                  worker_connections 1024;
+                acme: |
+                  location /.well-known/acme-challenge {
+                    proxy_pass http://IP_ADDR:8478;
+                  }
+                http: |
+                  # ACME will be inserted before this, if server is resolvable
+                  listen 8342;
+
+                  # All other URIs should result in a 301 redirect to equivalent HTTPS pages.
+                  location / {
+                    return 301 https://$host$request_uri;
+                  }
+                common: |
+                  # this section is always added
+                  # server_name, ssl_certificate, ssl_certificate_key are added automatically
+                  listen 8452 ssl;
+                server:
+                  user: |
+                    location / {
+                      proxy_pass http://127.0.0.1:80;
+                      proxy_set_header Host $host;
+                    }
+                  admin: |
+                    access_log /var/vcap/sys/log/nginx/access.log combined;
+
+                    # Will be inserted into admin server block
+                    location / {
+                      # need as our cookie are a bit big
+                      proxy_buffer_size   128k;
+                      proxy_buffers   4 256k;
+                      proxy_busy_buffers_size   256k;
+
+                      proxy_pass http://IP_ADDR:8427;
+                    }
+
     - name: credhub
       release: credhub
       properties:
@@ -85,11 +207,11 @@
             database: tlscredhub
             require_tls: false # cf default MySQL doesn't appear to be configured for TLS
           encryption:
-            keys: 
+            keys:
             - provider_name: int
               encryption_password: ((credhub_encryption_password))
               active: true
-            providers: 
+            providers:
             - name: int
               type: internal
 
@@ -97,6 +219,14 @@
   path: /variables/-
   value:
     name: credhub_encryption_password
+    type: password
+    options:
+      length: 40
+
+- type: replace
+  path: /variables/-
+  value:
+    name: le-responder-csrf-key
     type: password
     options:
       length: 40
@@ -119,18 +249,35 @@
       ca: tls_credhub_ca
       common_name: tls-credhub.service.cf.internal
 
-# Create UAA client for gen_nginx_config so that it can authenticate to our CredHub
 - type: replace
-  path: /instance_groups/name=uaa/jobs/name=uaa/properties/uaa/clients/gen_nginx_config?
+  path: /instance_groups/name=uaa/jobs/name=uaa/properties/uaa/clients/le-responder-user-client?
   value:
-    authorities: credhub.read,credhub.write
-    authorized-grant-types: client_credentials
-    secret: "((gen_nginx_config_client_secret))"
+    scope: openid
+    authorized-grant-types: authorization_code,refresh_token
+    secret: ((le-responder-user-client-secret))
+    access_token_validity: 3600
+    redirect-uri: https://((certs_le_external_domain))/oauth2callback
 
 - type: replace
   path: /variables/-
   value:
-    name: gen_nginx_config_client_secret
+    name: le-responder-user-client-secret
+    type: password
+    options:
+      length: 40
+
+# Create UAA client for le_responder so that it can authenticate to our CredHub
+- type: replace
+  path: /instance_groups/name=uaa/jobs/name=uaa/properties/uaa/clients/le_responder?
+  value:
+    authorities: credhub.read,credhub.write
+    authorized-grant-types: client_credentials
+    secret: "((le_responder_client_secret))"
+
+- type: replace
+  path: /variables/-
+  value:
+    name: le_responder_client_secret
     type: password
     options:
       length: 40
@@ -150,82 +297,42 @@
     release: nginx-tlsconfig
     properties:
       config:
-        nginx_job: nginx
-        refresh:
-          uaa_url: https://uaa.service.cf.internal:8443
-          uaa_ca_certificate: ((uaa_ca.certificate))
-          client_id: gen_nginx_config
-          client_secret: ((gen_nginx_config_client_secret))
-          credhub_url: https://tls-credhub.service.cf.internal:8844
-          credhub_ca_certificate: ((tls_credhub_ca.certificate))
-          period: 60
-        template:
-          global: |
-            # Optimise this depends on the vm-type and how many VCPU available.
-            worker_processes  1;
-            # Location for error log
-            error_log /var/vcap/sys/log/nginx/error.log info;
-          
-          events: |
-            # How many clients can be served simultaneously ?
-            # Run `ulimit -n` to find out our core's limitation.
+        nginx_pid: /var/vcap/sys/run/nginx/nginx.pid
+        config_dir: /var/vcap/data/gen-nginx-config
+        server:
+          url: https://le-responder.service.cf.internal:23352/nginx
+          client_certificate: ((tls_credhub_client))
+          ca_certificates:
+          - ((tls_credhub_ca.certificate))
+        period: 60
+        bootstrap: |
+          worker_processes 1;
+          error_log  /var/vcap/sys/log/nginx/error.log info;
+          events {
             worker_connections 1024;
+          }
 
-          http: |
-            # For more information on tcp_nopush and tcp_nodelay, read here:
-            # https://www.linode.com/docs/web-servers/nginx/configure-nginx-for-optimized-performance
-            tcp_nopush on;
-            tcp_nodelay on;
-            keepalive_timeout 65;
-            keepalive_requests 100000;
-            # prevent clickjacking attacks
-            add_header X-Frame-Options SAMEORIGIN;
-            # disallow circumventing declared MIME types
-            add_header X-Content-Type-Options nosniff;
-            # X-XSS-Protection
-            add_header X-XSS-Protection '1; mode=block';
-            include /var/vcap/packages/nginx/conf/mime.types;
-            # Set default type for unspecified mime type
-            default_type  application/octet-stream;
-            # We are not serving files stored on Nginx so no need for this feature which helps serving static files.
-            sendfile off;
-            # Turn off server side include
-            ssi off;
-            server_names_hash_bucket_size 64;
-            # Default HTTP request will redirect to HTTPS
-            server {
-              listen 8342;
+- type: replace
+  path: /variables/-
+  value:
+    name: tls_credhub_client
+    type: certificate
+    options:
+      ca: tls_credhub_ca
+      common_name: router.service.cf.internal
+      extended_key_usage:
+      - client_auth
 
-              # This is the most important bit for this to work, we will need to forward all acme-challenge requests to our
-              # letsencrypt errand instance.
-              location /.well-known/acme-challenge {
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header Host $http_host;
-                proxy_redirect off;
-
-                # FIXME: Change this to the static ip of the letsencrypt errand machine in production.
-                #proxy_pass http://le-challenge.cld.internal;
-                proxy_pass http://127.0.0.1:80;
-              }
-              # All other URIs should result in a 301 redirect to equivalent HTTPS pages.
-              location / {
-                return 301 https://$host$request_uri;
-              }
-            }
-
-          server: |
-            # server_name, ssl_certificate, ssl_certificate_key add automatically
-            listen 8452 ssl;
-            ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
-            ssl_prefer_server_ciphers on;
-            ssl_ciphers "EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH";
-            ssl_ecdh_curve secp384r1;
-            ssl_session_cache shared:SSL:10m;
-            ssl_session_tickets off;
-            #ssl_stapling on;
-            #ssl_stapling_verify on;
-            # disable HSTS header for now
-            #add_header Strict-Transport-Security "max-age=63072000;
+- type: replace
+  path: /variables/-
+  value:
+    name: tls_credhub_server
+    type: certificate
+    options:
+      ca: tls_credhub_ca
+      common_name: le-responder.service.cf.internal
+      extended_key_usage:
+      - server_auth
 
 # Add a standard nginx, where config is delegated to that produced by the gen-nginx-config job
 - type: replace
@@ -234,5 +341,17 @@
     name: nginx
     release: nginx
     properties:
+      pre_start: |
+        #!/bin/bash
+
+        set -x
+
+        NGINX_LOG_DIR=/var/vcap/sys/log/nginx
+        NGINX_WORKER=nobody
+
+        mkdir -p "${NGINX_LOG_DIR}"
+        chmod -R 0700 "${NGINX_LOG_DIR}"
+        chown -R "${NGINX_WORKER}" "${NGINX_LOG_DIR}"
+
       nginx_conf: |
-        include /var/vcap/jobs/gen-nginx-config/config/nginx.conf;
+        include /var/vcap/data/gen-nginx-config/nginx.conf;

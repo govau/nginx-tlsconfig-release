@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -24,7 +23,7 @@ import (
 )
 
 type config struct {
-	NginxJob  string `yaml:"nginx_job"` // name of nginx job
+	NginxPid  string `yaml:"nginx_pid"` // path to file with nginx pid in it
 	Bootstrap string `yaml:"bootstrap"` // bootstrap config so that nginx can start
 	Period    int    `yaml:"period"`    // seconds between refresh attempts
 	Server    struct {
@@ -36,7 +35,7 @@ type config struct {
 		CACerts []string `yaml:"ca_certificates"`
 	} `yaml:"server"`
 
-	configDir  string
+	ConfigDir  string `yaml:"config_dir"` // dir to write nginx config to
 	httpClient *http.Client
 }
 
@@ -54,7 +53,19 @@ func newConf(configPath string) (*config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.configDir = filepath.Dir(configPath)
+
+	_, err = os.Stat(c.ConfigDir)
+	switch {
+	case err == nil:
+		// pass
+	case os.IsNotExist(err):
+		err = os.MkdirAll(c.ConfigDir, 0700)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, err
+	}
 
 	if c.Period == 0 {
 		return nil, errors.New("you must specify a refresh period of at least 1 second")
@@ -89,7 +100,7 @@ func newConf(configPath string) (*config, error) {
 }
 
 func (c *config) ReloadNginx() error {
-	content, err := ioutil.ReadFile(fmt.Sprintf("/var/vcap/sys/run/%s/nginx.pid", c.NginxJob))
+	content, err := ioutil.ReadFile(c.NginxPid)
 	if err != nil {
 		return err
 	}
@@ -107,10 +118,10 @@ func (c *config) ReloadNginx() error {
 // Returns (did we write a new file)
 func (c *config) SaveSafe(name string, data []byte) (bool, error) {
 	if name == "nginx.conf" {
-		data = []byte(strings.Replace(string(data), "{{PWD}}", c.configDir, -1))
+		data = []byte(strings.Replace(string(data), "{{PWD}}", c.ConfigDir, -1))
 	}
 
-	fpath := filepath.Join(c.configDir, name)
+	fpath := filepath.Join(c.ConfigDir, name)
 
 	// See if we can avoid...
 	oldData, err := ioutil.ReadFile(fpath)
@@ -138,7 +149,7 @@ func (c *config) SaveSafe(name string, data []byte) (bool, error) {
 func (c *config) handleNoFailBootup(err error) (bool, error) {
 	log.Println("error connecting to server, but since it's startup time, we'll fail gracefully. Error that we're ignoring is:", err)
 
-	_, err = os.Stat(filepath.Join(c.configDir, "nginx.conf"))
+	_, err = os.Stat(filepath.Join(c.ConfigDir, "nginx.conf"))
 	if err != nil {
 		log.Println("nginx.conf not found, we'll overwrite with bootstrap config")
 		return c.SaveSafe("nginx.conf", []byte(c.Bootstrap))
