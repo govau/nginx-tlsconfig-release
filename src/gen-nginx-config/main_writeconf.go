@@ -190,7 +190,7 @@ func (c *config) tryUpdate() (bool, error) {
 
 		case header != nil && header.Typeflag == tar.TypeReg:
 			data := make([]byte, header.Size)
-			_, err := tarReader.Read(data)
+			_, err := io.ReadFull(tarReader, data)
 			if err != nil {
 				return false, err
 			}
