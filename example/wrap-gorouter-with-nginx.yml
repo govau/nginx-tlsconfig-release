@@ -1,12 +1,3 @@
-# Pull in the standard community nginx release
-- type: replace
-  path: /releases/-
-  value:
-    name: nginx
-    url: https://github.com/cloudfoundry-community/nginx-release/releases/download/v1.12.2/nginx-1.12.2.tgz
-    version: 1.12.2
-    sha1: e5e5f54d46e2a70fac85ba16e96ccb7e4148bdfa
-
 # Pull nginx-tlsconfig
 - type: replace
   path: /releases/-
@@ -115,6 +106,13 @@
               credhub_ca_certificates:
               - ((tls_credhub_ca.certificate))
 
+          outputs:
+            s3:
+            - bucket: ((leresponder_output_bucket))
+              object: certs.tgz
+              access_key: ((leresponder_output_iam_key))
+              access_secret: ((leresponder_output_iam_secret))
+
           servers:
             acme_responder:
               port: 8478
@@ -132,56 +130,6 @@
               external_url: https://((certs_le_external_domain))
               allowed_users:
               - admin
-
-            nginx_config:
-              port: 23352
-              clients:
-                names:
-                - router.service.cf.internal
-                ca_certificates:
-                - ((tls_credhub_ca.certificate))
-              certificate: ((tls_credhub_server))
-              hostname: le-responder.service.cf.internal
-              template:
-                global: |
-                  worker_processes 1;
-                  error_log  /var/vcap/sys/log/nginx/error.log info;
-                events: |
-                  worker_connections 1024;
-                acme: |
-                  location /.well-known/acme-challenge {
-                    proxy_pass http://IP_ADDR:8478;
-                  }
-                http: |
-                  # ACME will be inserted before this, if server is resolvable
-                  listen 8342;
-
-                  # All other URIs should result in a 301 redirect to equivalent HTTPS pages.
-                  location / {
-                    return 301 https://$host$request_uri;
-                  }
-                common: |
-                  # this section is always added
-                  # server_name, ssl_certificate, ssl_certificate_key are added automatically
-                  listen 8452 ssl;
-                server:
-                  user: |
-                    location / {
-                      proxy_pass http://127.0.0.1:80;
-                      proxy_set_header Host $host;
-                    }
-                  admin: |
-                    access_log /var/vcap/sys/log/nginx/access.log combined;
-
-                    # Will be inserted into admin server block
-                    location / {
-                      # need as our cookie are a bit big
-                      proxy_buffer_size   128k;
-                      proxy_buffers   4 256k;
-                      proxy_busy_buffers_size   256k;
-
-                      proxy_pass http://IP_ADDR:8427;
-                    }
 
     - name: credhub
       release: credhub
@@ -281,77 +229,3 @@
     type: password
     options:
       length: 40
-
-# Create our co-located jobs in the router
-
-# This job generate nginx config from data that is in the CredHub
-# During pre-start it will always create a file or error out.
-# However it will ignore errors related to being unable to communicate with CredHub,
-# and instead generates an empty but valid file (otherwise the rest of the cluster may not start)
-# Since the nginx file won't listen on the ports needed, it should ignored by the ELB in front.
-# Normally if it encounters an error, it simply won't rewrite the conf.
-- type: replace
-  path: /instance_groups/name=router/jobs/-
-  value:
-    name: gen-nginx-config
-    release: nginx-tlsconfig
-    properties:
-      config:
-        nginx_pid: /var/vcap/sys/run/nginx/nginx.pid
-        config_dir: /var/vcap/data/gen-nginx-config
-        server:
-          url: https://le-responder.service.cf.internal:23352/nginx
-          client_certificate: ((tls_credhub_client))
-          ca_certificates:
-          - ((tls_credhub_ca.certificate))
-        period: 60
-        bootstrap: |
-          worker_processes 1;
-          error_log  /var/vcap/sys/log/nginx/error.log info;
-          events {
-            worker_connections 1024;
-          }
-
-- type: replace
-  path: /variables/-
-  value:
-    name: tls_credhub_client
-    type: certificate
-    options:
-      ca: tls_credhub_ca
-      common_name: router.service.cf.internal
-      extended_key_usage:
-      - client_auth
-
-- type: replace
-  path: /variables/-
-  value:
-    name: tls_credhub_server
-    type: certificate
-    options:
-      ca: tls_credhub_ca
-      common_name: le-responder.service.cf.internal
-      extended_key_usage:
-      - server_auth
-
-# Add a standard nginx, where config is delegated to that produced by the gen-nginx-config job
-- type: replace
-  path: /instance_groups/name=router/jobs/-
-  value:
-    name: nginx
-    release: nginx
-    properties:
-      pre_start: |
-        #!/bin/bash
-
-        set -x
-
-        NGINX_LOG_DIR=/var/vcap/sys/log/nginx
-        NGINX_WORKER=nobody
-
-        mkdir -p "${NGINX_LOG_DIR}"
-        chmod -R 0700 "${NGINX_LOG_DIR}"
-        chown -R "${NGINX_WORKER}" "${NGINX_LOG_DIR}"
-
-      nginx_conf: |
-        include /var/vcap/data/gen-nginx-config/nginx.conf;

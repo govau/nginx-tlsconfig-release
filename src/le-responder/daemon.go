@@ -34,7 +34,6 @@ type certRenewer interface {
 	CanDelete(hostname string) bool
 	Sources() []string
 	SourceCanManual(string) bool
-	UpdateObservers() error
 	StartManualChallenge(hostname string) error
 	CompleteChallenge(hostname string) error
 }
@@ -52,6 +51,8 @@ type daemonConf struct {
 	certFactories map[string]certSource
 	sources       []string
 	observer      certObserver
+
+	updateRequests chan bool
 }
 
 func (dc *daemonConf) Sources() []string {
@@ -67,6 +68,8 @@ func (dc *daemonConf) SourceCanManual(cs string) bool {
 }
 
 func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage, observer certObserver, responder responder) error {
+	dc.updateRequests = make(chan bool, 1000)
+
 	if dc.Period == 0 {
 		return errors.New("period must be specified and non-zero. should be in seconds")
 	}
@@ -125,22 +128,47 @@ func (dc *daemonConf) Init(extAdminURL string, sm sourceMap, storage certStorage
 	return nil
 }
 
-func (dc *daemonConf) RunForever() {
-	for {
-		err := dc.UpdateObservers()
-		if err != nil {
-			log.Println("error bootstrapping observers, will try again later:", err)
-		} else {
-			break
-		}
-		time.Sleep(time.Second * 10)
+func (dc *daemonConf) updateObservers() error {
+	certs, err := dc.storage.FetchCerts()
+	if err != nil {
+		return err
 	}
-	for {
-		err := dc.periodicScan()
-		if err != nil {
-			log.Println("error in periodic scan, ignoring:", err)
+	return dc.observer.CertsAreUpdated(certs)
+}
+
+func (dc *daemonConf) RunForever() {
+	// Periodic scan loop, this will beed the update request queue
+	go func() {
+		for {
+			err := dc.periodicScan()
+			if err != nil {
+				log.Println("error in periodic scan, ignoring:", err)
+			}
+			time.Sleep(time.Second * time.Duration(dc.Period))
 		}
-		time.Sleep(time.Second * time.Duration(dc.Period))
+	}()
+
+	// Write out config loop
+	t := time.NewTimer(time.Second * 5)
+	for {
+		select {
+		case <-dc.updateRequests:
+			// we want an update.
+			// Reset our timer to fire after a reasonable period in case new certs also come through
+			if !t.Stop() {
+				<-t.C
+			}
+			t.Reset(time.Second * 30)
+		case <-t.C:
+			err := dc.updateObservers()
+			if err == nil {
+				// don't come back for a long itme
+				t.Reset(time.Hour * 24 * 365)
+			} else {
+				log.Printf("error updating observers, will try again soon: %s\n", err)
+				dc.updateRequests <- true
+			}
+		}
 	}
 }
 
@@ -261,8 +289,6 @@ func (dc *daemonConf) getCertAndSave(hostname, cs string, issuer func(context.Co
 		return err
 	}
 
-	log.Println("need a cert for:", hostname)
-
 	cf, ok := dc.certFactories[cs]
 	if !ok {
 		return fmt.Errorf("no cert source found for: %s", cs)
@@ -272,8 +298,6 @@ func (dc *daemonConf) getCertAndSave(hostname, cs string, issuer func(context.Co
 	if err != nil {
 		return err
 	}
-
-	log.Println("got it, saving to credhub")
 
 	roots := ""
 	for _, r := range der[1:] {
@@ -305,10 +329,8 @@ func (dc *daemonConf) getCertAndSave(hostname, cs string, issuer func(context.Co
 		return err
 	}
 
-	err = dc.UpdateObservers()
-	if err != nil {
-		return err
-	}
+	// yo, we got a cert
+	dc.updateRequests <- true
 
 	return nil
 }
@@ -319,19 +341,9 @@ func (dc *daemonConf) RenewCertNow(hostname, cs string) error {
 	})
 }
 
-func (dc *daemonConf) UpdateObservers() error {
-	certs, err := dc.storage.FetchCerts()
-	if err != nil {
-		return err
-	}
-	return dc.observer.CertsAreUpdated(certs)
-}
-
 func (dc *daemonConf) periodicScan() error {
-	log.Println("in periodic scan...")
 	// Next, see if our root cert exists
 	for _, fh := range dc.fixedHosts {
-		log.Println("checking", fh)
 		err := dc.renewCertIfNeeded(fh)
 		if err != nil {
 			return err

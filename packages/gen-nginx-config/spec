@@ -1,8 +1,0 @@
----
-name: gen-nginx-config
-
-dependencies:
-- golang
-
-files:
-- gen-nginx-config/**/*.go

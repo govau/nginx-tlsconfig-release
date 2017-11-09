@@ -147,12 +147,6 @@ func (as *adminServer) update(vars map[string]string, liu *uaa.LoggedInUser, w h
 			break
 		}
 
-		err = as.certRenewer.UpdateObservers()
-		if err != nil {
-			as.flashMessage(w, r, err.Error())
-			break
-		}
-
 		as.flashMessage(w, r, "cert successfully deleted")
 		break
 

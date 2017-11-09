@@ -60,7 +60,7 @@ type acmeChallenge struct {
 	Challenge     *acme.Challenge `json:"challenge"`
 }
 
-func NewDNSChallenge(client *acme.Client, chal *acme.Challenge, hostname, authorization string) (*acmeChallenge, error) {
+func newDNSChallenge(client *acme.Client, chal *acme.Challenge, hostname, authorization string) (*acmeChallenge, error) {
 	val, err := client.DNS01ChallengeRecord(chal.Token)
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (acs *acmeCertSource) ManualStartChallenge(ctx context.Context, hostname st
 		return nil, errors.New("no supported challenge type found")
 	}
 
-	return NewDNSChallenge(acs.acmeClient, chal, hostname, authz.URI)
+	return newDNSChallenge(acs.acmeClient, chal, hostname, authz.URI)
 }
 
 func (acs *acmeCertSource) ensureRegistered(ctx context.Context) {

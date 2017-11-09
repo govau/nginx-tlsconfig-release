@@ -26,10 +26,11 @@ type config struct {
 	} `yaml:"data"`
 
 	Servers struct {
-		ACME        serverResponder `yaml:"acme_responder"`
-		Admin       adminServer     `yaml:"admin_ui"`
-		NGINXConfig nginxServer     `yaml:"nginx_config"`
+		ACME  serverResponder `yaml:"acme_responder"`
+		Admin adminServer     `yaml:"admin_ui"`
 	} `yaml:"servers"`
+
+	Output outputObserver `yaml:"output"`
 }
 
 func newConf(configPath string) (*config, error) {
@@ -56,7 +57,7 @@ func newConf(configPath string) (*config, error) {
 		CredHub: &c.Data.CredHub,
 	}
 
-	err = c.Daemon.Init(c.Servers.Admin.ExternalURL, c.Sources, ccs, &c.Servers.NGINXConfig, &c.Servers.ACME)
+	err = c.Daemon.Init(c.Servers.Admin.ExternalURL, c.Sources, ccs, &c.Output, &c.Servers.ACME)
 	if err != nil {
 		return nil, err
 	}
@@ -71,17 +72,11 @@ func newConf(configPath string) (*config, error) {
 		return nil, err
 	}
 
-	err = c.Servers.NGINXConfig.Init()
-	if err != nil {
-		return nil, err
-	}
-
 	return &c, nil
 }
 
-func (c *config) RunForever() error {
-	go c.Daemon.RunForever()
+func (c *config) RunForever() {
 	go c.Servers.Admin.RunForever()
-	go c.Servers.NGINXConfig.RunForever()
-	return c.Servers.ACME.RunForever()
+	go c.Servers.ACME.RunForever()
+	c.Daemon.RunForever()
 }

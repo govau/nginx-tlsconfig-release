@@ -21,6 +21,6 @@ func main() {
 	}
 
 	if daemon {
-		log.Fatal(conf.RunForever())
+		conf.RunForever()
 	}
 }

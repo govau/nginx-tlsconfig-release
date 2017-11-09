@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 )
@@ -31,8 +32,8 @@ func (sr *serverResponder) ClearChallengeValue(k string) {
 	sr.challengeMutex.Unlock()
 }
 
-func (sr *serverResponder) RunForever() error {
-	return http.ListenAndServe(fmt.Sprintf(":%d", sr.Port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (sr *serverResponder) RunForever() {
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", sr.Port), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sr.challengeMutex.RLock()
 		v, ok := sr.challengeResponse[r.URL.Path]
 		sr.challengeMutex.RUnlock()
@@ -41,5 +42,5 @@ func (sr *serverResponder) RunForever() error {
 			return
 		}
 		w.Write(v)
-	}))
+	})))
 }
