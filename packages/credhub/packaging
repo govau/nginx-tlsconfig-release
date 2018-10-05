@@ -7,7 +7,7 @@ set -u
 
 # un-tar credhub file into credhub folder because the executable has the same
 # name as the script that runs to unpack this which is stored in the same folder.
-tar xzvf credhub/credhub-linux-2.0.0.tgz -C credhub/
+tar xzvf credhub/credhub-linux-1.7.7.tgz -C credhub/
 
 mkdir -p $BOSH_INSTALL_TARGET/bin
 cp credhub/credhub $BOSH_INSTALL_TARGET/bin/credhub
