@@ -1,0 +1,36 @@
+name: nginx-tlsconfig-release
+version: "1.3"
+commit_hash: 46a1350
+uncommitted_changes: false
+jobs:
+- name: credhub
+  version: 38ddb3e43ba2bf11ed0d8b3c7ae159301e5ed7af
+  fingerprint: 38ddb3e43ba2bf11ed0d8b3c7ae159301e5ed7af
+  sha1: 13e628f812da2b7ae8db3891b727dc02b401d17a
+- name: letsencrypt
+  version: d121eb358e534925729637f2a305570f9677faa4
+  fingerprint: d121eb358e534925729637f2a305570f9677faa4
+  sha1: 673d40e4e1cdf8ec1fe8ffabac0a2518d166febb
+- name: letsencrypt_to_credhub
+  version: eeca937261dbc15e9233ae352028722fe0d8b8da
+  fingerprint: eeca937261dbc15e9233ae352028722fe0d8b8da
+  sha1: 491f4671e19918556c61f497258af537d77adbc6
+- name: tls-config
+  version: b4ff8e38211596066a396092863348f9a69d6157
+  fingerprint: b4ff8e38211596066a396092863348f9a69d6157
+  sha1: e06476b9967ac6dbd4a803259879f40ce6e14083
+packages:
+- name: credhub
+  version: abb485bde07765e83a20e29ae24f92c250f51739
+  fingerprint: abb485bde07765e83a20e29ae24f92c250f51739
+  sha1: 3e81211e9c3d90d6e8aaef53b88ec135c20ea63d
+  dependencies: []
+- name: letsencrypt
+  version: 978a82b2fe11cf2e893ebd9e29589580ed13e5c6
+  fingerprint: 978a82b2fe11cf2e893ebd9e29589580ed13e5c6
+  sha1: bf01bc751f0a0ea2dc78ca3dc4319d80844279ce
+  dependencies: []
+license:
+  version: 10b395e52546d70e842f9f583bbcc626b8bf321c
+  fingerprint: 10b395e52546d70e842f9f583bbcc626b8bf321c
+  sha1: 57b30b445a7a833d2af9284ec329de5e72b6e87a
