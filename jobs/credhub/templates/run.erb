@@ -18,9 +18,13 @@ echo "Waiting for other script to finish before executing."
 CREDHUB="/var/vcap/packages/credhub/bin/credhub"
 
 export CURRENTTIME=$(date +"%Y%m%d-%H%M")
-export CREDHUB_CLI_USERNAME="<%= p('credhub_username') %>"
-export CREDHUB_CLI_PASSWORD="<%= p('credhub_password') %>"
-export CREDHUB_HOST="<%= p('credhub_host') %>"
+
+# Used automatically by credhub CLI
+export CREDHUB_CLIENT="<%= p('credhub_client_id') %>"
+export CREDHUB_SECRET="<%= p('credhub_client_secret') %>"
+export CREDHUB_CA_CERT="<%= p('credhub_ca_certs') %>"
+export CREDHUB_SERVER="<%= p('credhub_host') %>"
+
 export GLOBAL_CREDHUB_PREFIX="<%= p('credhub_prefix_name') %>"
 export GLOBAL_CERT_FOLDER="<%= p('cert_folder') %>"
 
@@ -57,12 +61,6 @@ fi
 <% else %>
   export SIGNEDCERT="$CERTFOLDER/chained.pem"
 <% end %>
-
-$CREDHUB  login \
-  -s $CREDHUB_HOST \
-  -u $CREDHUB_CLI_USERNAME \
-  -p $CREDHUB_CLI_PASSWORD \
-  --skip-tls-validation
 
 # Upload 2 versions to credhub ... one with $CURRENTTIME for revision
 echo "Importing $SIGNEDCERT"

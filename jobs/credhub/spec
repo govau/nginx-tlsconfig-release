@@ -21,15 +21,24 @@ properties:
   run_tail:
     default: "# empty run_tail"
     description: Custom script runs after credhub do its things
-  credhub_username:
-    default: "admin"
-    description: Username for credhub
   credhub_prefix_name:
     default: "/Bosh Lite Director/nginx/"
     description: In credhub, the variable name is prefix with the BOSH director name and project name. (eg:/Bosh Lite Director/nginx/)
-  credhub_password:
+  credhub_client_id:
+    default: "admin"
+    description: UAA client ID for credhub
+  credhub_client_secret:
     default: "NOTUSED"
-    description: Username for credhub
+    description: UAA client secret for credhub
+  credhub_ca_certs:
+    description: CA certs to connect to credhub and UAA
+    example: |
+      -----BEGIN CERTIFICATE-----
+      ...
+      -----END CERTIFICATE-----
+      -----BEGIN CERTIFICATE-----
+      ...
+      -----END CERTIFICATE-----
   credhub_host:
     default: "https://192.168.50.6:8844"
     description: Credhub address. For vbox environment it is https://192.168.50.6:8844

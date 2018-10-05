@@ -23,9 +23,12 @@ export WEBROOT=<%= p('webroot') %>
 ## SET alias to make executing credhub command easy
 CREDHUB="/var/vcap/packages/credhub/bin/credhub"
 
-export CREDHUB_CLI_USERNAME="<%= p('credhub_username') %>"
-export CREDHUB_CLI_PASSWORD="<%= p('credhub_password') %>"
-export CREDHUB_HOST="<%= p('credhub_host') %>"
+# Used automatically by credhub CLI
+export CREDHUB_CLIENT="<%= p('credhub_client_id') %>"
+export CREDHUB_SECRET="<%= p('credhub_client_secret') %>"
+export CREDHUB_CA_CERT="<%= p('credhub_ca_certs') %>"
+export CREDHUB_SERVER="<%= p('credhub_host') %>"
+
 export GLOBAL_CREDHUB_PREFIX="<%= p('credhub_prefix') %>"
 
 if [ ! -d $LENC_CERT_LOCATION ]; then
@@ -96,11 +99,6 @@ _EOF_<%= cert["name"] %>.account.key_
     export PRIVKEY="$CERTFOLDER/domain.key"
     export SIGNEDCERT="$CERTFOLDER/chained.pem"
 
-    $CREDHUB  login \
-      -s $CREDHUB_HOST \
-      -u $CREDHUB_CLI_USERNAME \
-      -p $CREDHUB_CLI_PASSWORD \
-      --skip-tls-validation
     <% if !p('demo') %>
         # LetsEncrypt will now do validation and optain new cert.
         # Account key is used for validation. This key can be used to revoke certs using certbot client.

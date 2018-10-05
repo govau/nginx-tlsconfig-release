@@ -131,8 +131,9 @@ instance_groups:
       run_tail: /var/vcap/jobs/nginx/bin/ctl stop
       cert_folder: "/var/vcap/store/letsencrypt/certs/"
       webroot: "/var/vcap/packages/nginx/html/.well-known/acme-challenge/"
-      credhub_username: credhub-cli
-      credhub_password: ((credhub_password))
+      credhub_client_id: credhub-cli
+      credhub_client_secret: ((credhub_password))
+      credhub_client_cas: ((credhub_ca))
       # FIXME: For this example, we are targetting the boshlite deployment credhub installation.
       credhub_host: "https://192.168.50.6:8844"
       # FIXME: When doing the deployment for this example, we will need to call this deployment nginx (bosh2 -e vbox -d nginx deploy nginx_manifest.yml -o this_example_com.yml )
@@ -172,11 +173,7 @@ variables:
   options:
     is_ca: true
     common_name: example.com
-# Pre-set this value in credhub using credhub-cli. Note that the name of the variable stored in credhub
-# should be in the following format: "DIRECTOR_NAME/DEPLOYMENT_NAME/VARIABLE_NAME"
-# Eg: credhub set -n "/Bosh Lite Director/nginx/credhub_password"
-- name: credhub_password
-  type: password
+
 
 update:
   canaries: 1
